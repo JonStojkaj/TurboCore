@@ -1,0 +1,86 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "TURBOCORE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Debug + ASan/UBSan + warnings as errors",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TURBOCORE_WARNINGS_AS_ERRORS": "ON",
+        "TURBOCORE_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release + benchmarks + Python module",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TURBOCORE_WARNINGS_AS_ERRORS": "ON",
+        "TURBOCORE_BUILD_BENCHMARKS": "ON",
+        "TURBOCORE_BUILD_PYTHON": "ON"
+      }
+    },
+    {
+      "name": "x86-rosetta",
+      "displayName": "x86_64 build on Apple Silicon (AVX2 backend under Rosetta 2, correctness only)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "TURBOCORE_WARNINGS_AS_ERRORS": "ON",
+        "TURBOCORE_ENABLE_SANITIZERS": "ON",
+        "TURBOCORE_ENABLE_AVX2": "ON",
+        "TURBOCORE_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cuda",
+      "displayName": "Release with the CUDA backend required",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TURBOCORE_ENABLE_CUDA": "ON",
+        "TURBOCORE_BUILD_BENCHMARKS": "ON",
+        "TURBOCORE_BUILD_PYTHON": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "x86-rosetta", "configurePreset": "x86-rosetta" },
+    { "name": "cuda", "configurePreset": "cuda" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    { "name": "dev", "inherits": "base", "configurePreset": "dev" },
+    { "name": "release", "inherits": "base", "configurePreset": "release" },
+    {
+      "name": "x86-rosetta",
+      "inherits": "base",
+      "configurePreset": "x86-rosetta",
+      "environment": {
+        "ROSETTA_ADVERTISE_AVX": "1",
+        "TURBOCORE_REQUIRE_AVX2": "1"
+      }
+    },
+    { "name": "cuda", "inherits": "base", "configurePreset": "cuda" }
+  ]
+}
