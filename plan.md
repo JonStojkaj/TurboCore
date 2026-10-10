@@ -376,23 +376,56 @@ Status:
       out-of-bounds canaries; compressed streams byte-identical between
       backends for every option combination; AVX2 quantization identical to
       scalar for all 2³² inputs. All of it run under Rosetta 2.
+- [x] **Multi-threading over blocks** (`CompressionOptions::threads`,
+      `DecompressionOptions::threads`, `std::thread`). Blocks are compressed
+      into per-block buffers and assembled in order, so the stream is
+      byte-identical for every thread count; if several blocks are damaged the
+      decoder reports the first one regardless of timing. Clean under
+      ThreadSanitizer.
+- [x] **Per-plane DEFLATE blocks with exact cost selection.** Each byte plane
+      of a shuffled block is its own DEFLATE block with its own Huffman code,
+      and is emitted as the cheapest of stored / Huffman-only / LZ77+Huffman.
+      Streams stay valid RFC 1951 (zlib cross-check extended to cover it).
+- [x] **Skipping the LZ77 search where it does not pay** (levels 1–8). The
+      search runs on an 8 KiB probe of each plane; a plane is searched in full
+      only if that predicts a saving of at least 2 % of the whole block.
+      Level 9 always searches everything.
 - [ ] **Native x86 measurements.** No AVX2 number exists yet: Rosetta timings
       are meaningless (emulated AVX2 runs *slower* than scalar there).
       `bench_kernels.cpp` is ready to run on the x86 cloud instance.
-- [ ] Error metrics, histogram, entropy stage (steps 5–7 below).
+- [ ] Vectorised error metrics, SIMD inside the entropy stage (steps 5–7
+      below), lazy matching.
 
-**What the first measurements say about priorities.** On the arm64
-development machine the *scalar* transform kernels (auto-vectorised by the
-compiler) already run at 12–65 GiB/s, while the codec as a whole compresses at
-0.02–0.23 GiB/s. The transforms are therefore under 2 % of compression time,
-and vectorising them cannot move end-to-end compression throughput. The
-kernels where SIMD should matter are the slow scalar ones: FP16 quantization
-(1.8 GiB/s scalar), CRC-32C (1.8 GiB/s scalar, and the limiting step when
-decoding stored blocks), and BFloat16 quantization (4.2 GiB/s). End-to-end
-compression speed is decided by LZ77 and Huffman coding, so the next work
-that pays off is, in order: multi-threading over blocks, skipping the LZ77
-search on high-entropy byte planes, and only then SIMD inside the entropy
-stage (step 7).
+**Where the time went.** The scalar transform kernels (auto-vectorised by the
+compiler) run at 12–65 GiB/s, while the Phase 1 codec compressed at
+0.02–0.23 GiB/s: the transforms were under 2 % of compression time, so
+vectorising them could not move end-to-end throughput. The time was in the
+LZ77 match search on byte planes where it finds nothing useful. That is what
+the last two items above address, and threading multiplies the result.
+
+Measured on the development machine (Apple Silicon, 6 performance + 4
+efficiency cores, scalar backend, 16 MiB of FP32, level 6):
+
+| Dataset | Phase 1 (1 thread) | Now, 1 thread | Now, all cores | Ratio before → now |
+|---------|--------------------|---------------|----------------|--------------------|
+| Smooth synthetic field, compress | 151 MiB/s | 130 MiB/s | 904 MiB/s | 12.98 → 13.35 |
+| Smooth signal + noise, compress  | 19 MiB/s  | 132 MiB/s | 881 MiB/s | 1.573 → 1.656 |
+| Random bit patterns, compress    | 61 MiB/s  | 589 MiB/s | 3.2 GiB/s | 1.00 |
+| Smooth synthetic field, decompress | 350 MiB/s | 382 MiB/s | 2.8 GiB/s | |
+| Smooth signal + noise, decompress  | 223 MiB/s | 295 MiB/s | 2.1 GiB/s | |
+| Random bit patterns, decompress    | 1.4 GiB/s | 3.3 GiB/s | 18 GiB/s  | |
+
+Notes on reading this table:
+
+- The smooth dataset got slightly slower single-threaded (the probe pass is
+  extra work where LZ77 is worth running anyway) and gained 3 % ratio from
+  per-plane Huffman codes.
+- On the noisy dataset the ratio went *up* although less searching is done,
+  because separate Huffman codes per plane gain more than the skipped
+  matches lose. Level 9 reaches 1.687 on it, at 4 MiB/s per thread.
+- The skip decision is a heuristic. It can miss repetition that starts after
+  the probe; level 9 exists for data where that matters.
+- All datasets are synthetic. Real datasets are still an open item.
 
 Steps:
 

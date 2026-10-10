@@ -50,6 +50,7 @@ target_sources(turbocore
 )
 target_include_directories(turbocore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(turbocore PUBLIC cxx_std_20)
+target_link_libraries(turbocore PRIVATE Threads::Threads)
 set_target_properties(turbocore PROPERTIES
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}

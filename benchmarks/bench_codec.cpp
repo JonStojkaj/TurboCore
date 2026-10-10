@@ -58,7 +58,8 @@ void set_counters(benchmark::State& state, std::size_t raw_bytes, std::size_t co
 
 void BM_Compress(benchmark::State& state) {
   const std::vector<float> data = make_data(static_cast<Data>(state.range(0)));
-  const turbocore::Compressor compressor({.level = static_cast<int>(state.range(1))});
+  const turbocore::Compressor compressor(
+      {.level = static_cast<int>(state.range(1)), .threads = static_cast<unsigned>(state.range(2))});
   std::size_t compressed_bytes = 0;
   for (auto _ : state) {
     const std::vector<std::uint8_t> stream = compressor.compress(data);
@@ -72,7 +73,7 @@ void BM_Decompress(benchmark::State& state) {
   const std::vector<float> data = make_data(static_cast<Data>(state.range(0)));
   const std::vector<std::uint8_t> stream =
       turbocore::Compressor({.level = static_cast<int>(state.range(1))}).compress(data);
-  const turbocore::Decompressor decompressor;
+  const turbocore::Decompressor decompressor({.threads = static_cast<unsigned>(state.range(2))});
   for (auto _ : state) {
     const std::vector<float> decoded = decompressor.decompress(stream);
     benchmark::DoNotOptimize(decoded.data());
@@ -81,10 +82,13 @@ void BM_Decompress(benchmark::State& state) {
 }
 
 void apply_arguments(benchmark::internal::Benchmark* b) {
-  b->ArgNames({"data", "level"})->Unit(benchmark::kMillisecond);
+  // threads: 1 isolates the codec itself; 0 uses every hardware thread.
+  b->ArgNames({"data", "level", "threads"})->Unit(benchmark::kMillisecond)->UseRealTime();
   for (const Data kind : {Data::Smooth, Data::NoisySensor, Data::RandomBits}) {
     for (const int level : {1, 6, 9}) {
-      b->Args({static_cast<int>(kind), level});
+      for (const int threads : {1, 0}) {
+        b->Args({static_cast<int>(kind), level, threads});
+      }
     }
   }
 }

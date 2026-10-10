@@ -76,6 +76,8 @@ if(TURBOCORE_ENABLE_SANITIZERS)
   endif()
 endif()
 
+find_package(Threads REQUIRED)
+
 include(TurboCoreCompilerOptions)
 include(TurboCoreDependencies)
 include(TurboCoreSIMD)

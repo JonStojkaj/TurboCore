@@ -16,8 +16,8 @@ CLI = sys.argv[1]
 RAW = -15  # zlib wbits for a raw DEFLATE stream with a 32 KiB window
 
 
-def run(mode, argument, data):
-    result = subprocess.run([CLI, mode, str(argument)], input=data, capture_output=True)
+def run(mode, argument, data, *extra):
+    result = subprocess.run([CLI, mode, str(argument), *map(str, extra)], input=data, capture_output=True)
     if result.returncode != 0:
         raise AssertionError(f"{mode} {argument} failed: {result.stderr.decode(errors='replace')}")
     return result.stdout
@@ -86,14 +86,20 @@ def main():
     checks = 0
     for name, data in cases().items():
         # TurboCore encoder -> zlib decoder.
+        # Segment hints change how the stream is split into blocks (and which
+        # block types appear), so sweep them: none, short, and a quarter of
+        # the input, as the float pipeline would pass for 4 byte planes.
         for level in (1, 6, 9):
-            stream = run("deflate", level, data)
-            d = zlib.decompressobj(RAW)
-            decoded = d.decompress(stream) + d.flush()
-            assert decoded == data, f"{name}: zlib decoded our level-{level} stream to different data"
-            assert d.eof, f"{name}: zlib found no final block in our level-{level} stream"
-            assert not d.unused_data, f"{name}: our level-{level} stream has trailing bytes"
-            checks += 1
+            for hint in (0, 4096, max(1, len(data) // 4)):
+                stream = run("deflate", level, data, hint)
+                d = zlib.decompressobj(RAW)
+                decoded = d.decompress(stream) + d.flush()
+                label = f"{name}: level {level}, hint {hint}"
+                assert decoded == data, f"{label}: zlib decoded our stream to different data"
+                assert d.eof, f"{label}: zlib found no final block in our stream"
+                assert not d.unused_data, f"{label}: our stream has trailing bytes"
+                assert len(stream) <= len(data) + 10 * (len(data) // 4096 + 1), f"{label}: larger than stored"
+                checks += 1
 
         # zlib encoder -> TurboCore decoder.
         for label, stream in zlib_streams(data):

@@ -2,6 +2,14 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
+#include <arm_acle.h>
+#define TURBOCORE_ARM_CRC32 1
+#else
+#define TURBOCORE_ARM_CRC32 0
+#endif
 
 namespace turbocore::detail {
 
@@ -33,7 +41,7 @@ constexpr SliceTables kTables = make_tables();
 
 }  // namespace
 
-std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
+std::uint32_t crc32c_portable(std::span<const std::uint8_t> data) noexcept {
   std::uint32_t crc = 0xFFFFFFFFu;
   const std::uint8_t* p = data.data();
   std::size_t remaining = data.size();
@@ -52,6 +60,32 @@ std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
     --remaining;
   }
   return crc ^ 0xFFFFFFFFu;
+}
+
+std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
+#if TURBOCORE_ARM_CRC32
+  // CRC-32C instructions are part of the baseline on the 64-bit Arm targets
+  // this is compiled for (the macro reflects the compile target), so no
+  // runtime check is needed.
+  std::uint32_t crc = 0xFFFFFFFFu;
+  const std::uint8_t* p = data.data();
+  std::size_t remaining = data.size();
+  while (remaining >= 8) {
+    std::uint64_t word;
+    std::memcpy(&word, p, sizeof(word));
+    crc = __crc32cd(crc, word);
+    p += 8;
+    remaining -= 8;
+  }
+  while (remaining > 0) {
+    crc = __crc32cb(crc, *p);
+    ++p;
+    --remaining;
+  }
+  return crc ^ 0xFFFFFFFFu;
+#else
+  return crc32c_portable(data);
+#endif
 }
 
 }  // namespace turbocore::detail

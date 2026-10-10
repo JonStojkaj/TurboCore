@@ -52,7 +52,7 @@ TEST(Backend, RequestingAnUnavailableBackendFailsLoudly) {
     }
   };
   expect_unavailable([] { const Compressor c({.backend = Backend::Avx2}); });
-  expect_unavailable([] { const Decompressor d(Backend::Avx2); });
+  expect_unavailable([] { const Decompressor d({.backend = Backend::Avx2}); });
   expect_unavailable([] {
     const std::vector<float> in(4);
     std::vector<std::uint16_t> out(4);
@@ -118,8 +118,8 @@ TEST(BackendParity, EitherBackendDecodesTheSameValues) {
     for (const CompressionOptions& options : option_sets()) {
       SCOPED_TRACE(dataset.name);
       const std::vector<std::uint8_t> stream = Compressor(options).compress(dataset.values);
-      const std::vector<float> scalar = Decompressor(Backend::Scalar).decompress(stream);
-      const std::vector<float> avx2 = Decompressor(Backend::Avx2).decompress(stream);
+      const std::vector<float> scalar = Decompressor({.backend = Backend::Scalar}).decompress(stream);
+      const std::vector<float> avx2 = Decompressor({.backend = Backend::Avx2}).decompress(stream);
       ASSERT_TRUE(bit_identical(avx2, scalar));
       if (!options.quantization.has_value()) {
         ASSERT_TRUE(bit_identical(avx2, dataset.values));

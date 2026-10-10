@@ -48,6 +48,10 @@ struct CompressionOptions {
 
   /// Implementation to run. Has no effect on the output bytes.
   Backend backend = Backend::Auto;
+
+  /// Worker threads; blocks are compressed independently, one per thread.
+  /// 0 means one per hardware thread. Has no effect on the output bytes.
+  unsigned threads = 0;
 };
 
 /// FP32 compressor: [optional quantization ->] predictor -> byte shuffle ->

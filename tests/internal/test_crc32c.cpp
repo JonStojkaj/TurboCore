@@ -45,6 +45,7 @@ TEST(Crc32c, SlicedPathMatchesBytewiseReference) {
   for (std::size_t length = 0; length <= data.size(); ++length) {
     const std::span<const std::uint8_t> prefix(data.data(), length);
     EXPECT_EQ(crc32c(prefix), bytewise(prefix)) << "length " << length;
+    EXPECT_EQ(turbocore::detail::crc32c_portable(prefix), bytewise(prefix)) << "length " << length;
   }
 }
 

@@ -22,27 +22,38 @@ struct StreamInfo {
   std::optional<QuantFormat> quantization;
 };
 
+struct DecompressionOptions {
+  /// Implementation to run. Any backend decodes streams written by any other.
+  Backend backend = Backend::Auto;
+
+  /// Worker threads; blocks are decoded independently, one per thread.
+  /// 0 means one per hardware thread.
+  unsigned threads = 0;
+};
+
 /// Decoder for streams produced by Compressor. All input is treated as
 /// untrusted: malformed data raises Error and never reads or writes out of
 /// bounds.
 class TURBOCORE_EXPORT Decompressor {
  public:
-  /// Throws Error(BackendUnavailable) if `backend` cannot run here. Any
-  /// backend decodes streams written by any other.
-  explicit Decompressor(Backend backend = Backend::Auto);
+  Decompressor();
 
-  [[nodiscard]] Backend backend() const noexcept { return backend_; }
+  /// Throws Error(BackendUnavailable) if the requested backend cannot run here.
+  explicit Decompressor(const DecompressionOptions& options);
+
+  [[nodiscard]] const DecompressionOptions& options() const noexcept { return options_; }
 
   /// Validates and returns the header without decoding any block.
   /// Throws Error(UnsupportedFormat | CorruptStream).
   [[nodiscard]] static StreamInfo inspect(std::span<const std::uint8_t> stream);
 
   /// Always returns FP32: a quantized stream is expanded back to float.
-  /// Throws Error(UnsupportedFormat | CorruptStream | ChecksumMismatch).
+  /// Throws Error(UnsupportedFormat | CorruptStream | ChecksumMismatch). If
+  /// several blocks are damaged, the error reported is that of the first one.
   [[nodiscard]] std::vector<float> decompress(std::span<const std::uint8_t> stream) const;
 
  private:
-  Backend backend_;
+  DecompressionOptions options_;
 };
 
 }  // namespace turbocore

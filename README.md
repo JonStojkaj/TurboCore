@@ -7,7 +7,7 @@ floating-point error-analysis module and Python bindings.
 **Status:** the scalar reference implementation works:
 
 - lossless FP32 compression (delta/XOR predictor, byte shuffle, DEFLATE) in a
-  checksummed block container; single-threaded and not yet fast;
+  checksummed block container, multi-threaded over blocks;
 - correctly rounded FP32 → FP16 / BFloat16 quantization with an error-analysis
   module (ULP error, MSE, PSNR, NaN/Inf accounting), selectable as a lossy
   mode of the compressor.

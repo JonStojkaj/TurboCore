@@ -10,6 +10,7 @@ add_executable(turbocore_tests
   test_error_analysis.cpp
   test_lossy.cpp
   test_quantization.cpp
+  test_threads.cpp
 )
 target_link_libraries(turbocore_tests PRIVATE TurboCore::turbocore GTest::gtest_main)
 turbocore_configure_target(turbocore_tests)
@@ -31,6 +32,7 @@ if(NOT BUILD_SHARED_LIBS)
     internal/test_deflate.cpp
     internal/test_huffman.cpp
     internal/test_kernels.cpp
+    internal/test_parallel.cpp
     internal/test_transforms.cpp
   )
   target_link_libraries(turbocore_internal_tests PRIVATE TurboCore::turbocore GTest::gtest_main)

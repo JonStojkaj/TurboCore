@@ -17,25 +17,85 @@
 // The per-block lossless pipeline, shared by the 32-bit (FP32) and 16-bit
 // (quantized) element widths:
 //
-//   encode: words -> CRC -> predictor -> byte shuffle -> codec -> payload
-//   decode: payload -> codec -> byte unshuffle -> predictor -> CRC check -> words
+//   encode: words -> CRC -> predictor -> byte shuffle -> | -> codec -> payload
+//   decode: payload -> codec -> | -> byte unshuffle -> predictor -> CRC check -> words
 //
-// The data-parallel steps (CRC, predictor, shuffle) go through a KernelTable,
-// so the same code runs on whichever backend was selected. Both classes own
-// their scratch buffers, so one instance reused across the blocks of a stream
-// allocates only once.
+// The part left of the bar is the transform stage: data-parallel, run through
+// a KernelTable, and the part a GPU backend can take over for a whole stream
+// at once. The part right of it is the entropy stage (BlockPacker /
+// BlockUnpacker), which is serial within a block and runs one block per CPU
+// thread.
+//
+// Every class here owns its scratch buffers and is meant to be created once
+// per thread and reused for all the blocks that thread handles.
 
 namespace turbocore::detail {
+
+/// Entropy stage, encoding side.
+class BlockPacker {
+ public:
+  explicit BlockPacker(const Codec& codec) noexcept : codec_(codec) {}
+
+  /// Replaces the contents of `payload` with the block's payload and returns
+  /// its index entry. `plane_bytes` is the size of one byte plane if
+  /// `transformed` is shuffled, 0 otherwise.
+  IndexEntry pack(std::span<const std::uint8_t> transformed, std::uint32_t crc, std::size_t plane_bytes,
+                  std::vector<std::uint8_t>& payload) const {
+    payload.clear();
+    codec_.compress(transformed, payload, plane_bytes);
+
+    // Incompressible blocks are stored verbatim so the stream never grows by
+    // more than the header and index.
+    const bool use_deflate = payload.size() < transformed.size();
+    if (!use_deflate) {
+      payload.assign(transformed.begin(), transformed.end());
+    }
+    return IndexEntry{
+        .compressed_size = static_cast<std::uint32_t>(payload.size()),
+        .crc = crc,
+        .method = use_deflate ? BlockMethod::Deflate : BlockMethod::Stored,
+    };
+  }
+
+ private:
+  const Codec& codec_;
+};
+
+/// Entropy stage, decoding side.
+class BlockUnpacker {
+ public:
+  explicit BlockUnpacker(const Codec& codec) noexcept : codec_(codec) {}
+
+  /// Writes the block's `transformed.size()` transformed bytes.
+  /// Throws Error(CorruptStream).
+  void unpack(std::span<const std::uint8_t> payload, const IndexEntry& entry,
+              std::span<std::uint8_t> transformed) const {
+    if (entry.method == BlockMethod::Stored) {
+      if (payload.size() != transformed.size()) {
+        throw Error(ErrorCode::CorruptStream, "stored block has the wrong size");
+      }
+      if (!payload.empty()) {
+        std::memcpy(transformed.data(), payload.data(), payload.size());
+      }
+    } else if (!codec_.decompress(payload, transformed)) {
+      throw Error(ErrorCode::CorruptStream, "block is not a valid DEFLATE stream of the expected size");
+    }
+  }
+
+ private:
+  const Codec& codec_;
+};
 
 template <std::unsigned_integral Word>
 class BlockEncoder {
  public:
   BlockEncoder(const KernelTable& kernels, Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
-      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
+      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), packer_(codec) {}
 
-  /// Appends the block's payload to `out` and returns its index entry.
-  /// `words` is used as working storage and holds garbage afterwards.
-  IndexEntry encode(std::span<Word> words, std::vector<std::uint8_t>& out) {
+  /// Replaces the contents of `payload` with the block's payload and returns
+  /// its index entry. `words` is used as working storage and holds garbage
+  /// afterwards.
+  IndexEntry encode(std::span<Word> words, std::vector<std::uint8_t>& payload) {
     const std::size_t byte_count = words.size_bytes();
     const std::uint32_t crc = kernels_.crc32c(reinterpret_cast<const std::uint8_t*>(words.data()), byte_count);
 
@@ -56,60 +116,34 @@ class BlockEncoder {
     } else {
       std::memcpy(transformed_.data(), words.data(), byte_count);
     }
-
-    packed_.clear();
-    codec_.compress(transformed_, packed_);
-
-    // Incompressible blocks are stored verbatim so the stream never grows by
-    // more than the header and index.
-    const bool use_deflate = packed_.size() < transformed_.size();
-    const std::vector<std::uint8_t>& payload = use_deflate ? packed_ : transformed_;
-    out.insert(out.end(), payload.begin(), payload.end());
-    return IndexEntry{
-        .compressed_size = static_cast<std::uint32_t>(payload.size()),
-        .crc = crc,
-        .method = use_deflate ? BlockMethod::Deflate : BlockMethod::Stored,
-    };
+    return packer_.pack(transformed_, crc, byte_shuffle_ ? words.size() : 0, payload);
   }
 
  private:
   const KernelTable& kernels_;
   Predictor predictor_;
   bool byte_shuffle_;
-  const Codec& codec_;
+  BlockPacker packer_;
   std::vector<std::uint8_t> transformed_;
-  std::vector<std::uint8_t> packed_;
 };
 
 template <std::unsigned_integral Word>
 class BlockDecoder {
  public:
   BlockDecoder(const KernelTable& kernels, Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
-      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
+      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), unpacker_(codec) {}
 
   /// Fills `words` from the block's payload.
   /// Throws Error(CorruptStream | ChecksumMismatch).
   void decode(std::span<const std::uint8_t> payload, const IndexEntry& entry, std::span<Word> words) {
     const std::size_t byte_count = words.size_bytes();
-
-    std::span<const std::uint8_t> transformed;
-    if (entry.method == BlockMethod::Stored) {
-      if (payload.size() != byte_count) {
-        throw Error(ErrorCode::CorruptStream, "stored block has the wrong size");
-      }
-      transformed = payload;
-    } else {
-      inflated_.resize(byte_count);
-      if (!codec_.decompress(payload, inflated_)) {
-        throw Error(ErrorCode::CorruptStream, "block is not a valid DEFLATE stream of the expected size");
-      }
-      transformed = inflated_;
-    }
+    transformed_.resize(byte_count);
+    unpacker_.unpack(payload, entry, transformed_);
 
     if (byte_shuffle_) {
-      unshuffle_bytes(kernels_, transformed, words);
+      unshuffle_bytes(kernels_, std::span<const std::uint8_t>(transformed_), words);
     } else {
-      std::memcpy(words.data(), transformed.data(), byte_count);
+      std::memcpy(words.data(), transformed_.data(), byte_count);
     }
 
     switch (predictor_) {
@@ -132,8 +166,8 @@ class BlockDecoder {
   const KernelTable& kernels_;
   Predictor predictor_;
   bool byte_shuffle_;
-  const Codec& codec_;
-  std::vector<std::uint8_t> inflated_;
+  BlockUnpacker unpacker_;
+  std::vector<std::uint8_t> transformed_;
 };
 
 }  // namespace turbocore::detail

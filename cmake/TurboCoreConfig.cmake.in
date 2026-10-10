@@ -3,11 +3,14 @@
 set(TurboCore_HAS_AVX2 @TURBOCORE_HAS_AVX2@)
 set(TurboCore_HAS_CUDA @TURBOCORE_HAS_CUDA@)
 
-# A static TurboCore built with CUDA carries a link-only dependency on the
-# CUDA runtime, which the consumer has to resolve.
-if(TurboCore_HAS_CUDA AND NOT "@BUILD_SHARED_LIBS@")
+# A static TurboCore carries link-only dependencies on the thread library and,
+# when built with CUDA, on the CUDA runtime; the consumer has to resolve them.
+if(NOT "@BUILD_SHARED_LIBS@")
   include(CMakeFindDependencyMacro)
-  find_dependency(CUDAToolkit)
+  find_dependency(Threads)
+  if(TurboCore_HAS_CUDA)
+    find_dependency(CUDAToolkit)
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboCoreTargets.cmake")

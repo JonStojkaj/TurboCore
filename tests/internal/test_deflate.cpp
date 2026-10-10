@@ -76,6 +76,80 @@ TEST_P(DeflateRoundTrip, DecodesToTheOriginalBytes) {
 
 INSTANTIATE_TEST_SUITE_P(Levels, DeflateRoundTrip, ::testing::Values(1, 6, 9));
 
+/// Four regions with very different statistics, like the byte planes of a
+/// shuffled float block: constant, a small random alphabet, noise, text.
+Bytes plane_like(std::size_t plane) {
+  Bytes data(plane, 0x3F);
+  std::mt19937 rng(21);
+  for (std::size_t i = 0; i < plane; ++i) {
+    data.push_back(static_cast<std::uint8_t>(0x40u + rng() % 12u));
+  }
+  const Bytes noise = random_bytes(plane, 22);
+  data.insert(data.end(), noise.begin(), noise.end());
+  while (data.size() < 4 * plane) {
+    data.push_back(static_cast<std::uint8_t>("turbocore "[data.size() % 10]));
+  }
+  return data;
+}
+
+/// Upper bound for any input: every segment can fall back to stored blocks,
+/// which cost 5 bytes of framing each. A segment is at least 4096 bytes and
+/// needs two stored blocks when it is exactly one byte over the 65535 limit,
+/// so framing stays below 10 bytes per 4096.
+std::size_t stored_bound(std::size_t size) { return size + 10 * (size / 4096 + 1); }
+
+TEST(Deflate, SegmentHintsNeverAffectCorrectness) {
+  for (const std::size_t plane : {std::size_t{100}, std::size_t{5000}, std::size_t{65536}, std::size_t{70001}}) {
+    const Bytes data = plane_like(plane);
+    for (const int level : {1, 6, 9}) {
+      const DeflateCodec codec(level);
+      for (const std::size_t hint : {std::size_t{0}, plane, std::size_t{1}, std::size_t{7}, std::size_t{4096}, data.size(), data.size() * 2}) {
+        SCOPED_TRACE("plane=" + std::to_string(plane) + " level=" + std::to_string(level) + " hint=" + std::to_string(hint));
+        Bytes packed;
+        codec.compress(data, packed, hint);
+        Bytes unpacked(data.size());
+        ASSERT_TRUE(codec.decompress(packed, unpacked));
+        ASSERT_EQ(unpacked, data);
+        EXPECT_LE(packed.size(), stored_bound(data.size()));
+      }
+    }
+  }
+}
+
+// With the planes modelled separately, each one costs what it should: the
+// constant plane almost nothing, the 12-symbol plane about log2(12) bits per
+// byte, the noise plane its own size.
+TEST(Deflate, PlanesAreModelledSeparately) {
+  const std::size_t plane = 65536;
+  const Bytes data = plane_like(plane);
+  const DeflateCodec codec(6);
+
+  Bytes with_hint;
+  codec.compress(data, with_hint, plane);
+  const double small_alphabet_bytes = static_cast<double>(plane) * 3.585 / 8.0;  // log2(12) bits per byte
+  EXPECT_LT(static_cast<double>(with_hint.size()), 1.03 * (small_alphabet_bytes + static_cast<double>(plane)) + 3000.0);
+}
+
+TEST(Deflate, IncompressibleInputCostsOnlyStoredBlockFraming) {
+  const Bytes noise = random_bytes(200000, 31);
+  for (const int level : {1, 6, 9}) {
+    Bytes packed;
+    DeflateCodec(level).compress(noise, packed, 65536);
+    EXPECT_LE(packed.size(), stored_bound(noise.size())) << level;
+  }
+}
+
+// The search-skipping heuristic (levels below 9) must not cost much ratio on
+// the data it was designed for, relative to searching everything.
+TEST(Deflate, SkippingTheSearchCostsLittleRatio) {
+  const Bytes data = plane_like(65536);
+  Bytes adaptive;
+  Bytes exhaustive;
+  DeflateCodec(8).compress(data, adaptive, 65536);
+  DeflateCodec(9).compress(data, exhaustive, 65536);
+  EXPECT_LE(static_cast<double>(adaptive.size()), 1.02 * static_cast<double>(exhaustive.size()));
+}
+
 TEST(Deflate, CompressAppendsToExistingOutput) {
   const DeflateCodec codec;
   Bytes out = {0xDE, 0xAD};
