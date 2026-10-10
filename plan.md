@@ -7,8 +7,8 @@ Python bindings. No external compression library is used anywhere in the
 library itself.
 
 Status: **Phase 0 complete. Phase 1 core implemented** (lossless 1D FP32 codec,
-single-threaded). **Phase 2 math implemented** (quantizers and error metrics,
-exhaustively verified); wiring quantized data into the container is open.
+single-threaded). **Phase 2 implemented** (quantizers, error metrics, lossy mode in the
+container; exhaustively verified).
 Phases 3–5 are not started.
 
 ---
@@ -102,9 +102,10 @@ the LZ77 window reset at every block boundary. The block size (default 65 536
 elements = 256 KiB, tunable) trades ratio against parallelism and is a
 benchmark parameter, not a constant.
 
-Not yet in the format: array shape (needed for the 2D image predictor) and
-element types other than FP32 (needed for Phase 2). Both will be added under
-a new format version.
+Version 2 adds the 16-bit element types (FP16, BFloat16) used by the lossy
+mode; the layout is unchanged and lossless streams are still written as
+version 1. Not yet in the format: array shape (needed for the 2D image
+predictor).
 
 ### 2.4 Backends and dispatch
 
@@ -281,10 +282,11 @@ Status:
       rounding model, and bit-for-bit against the CPU's own conversion on
       AArch64 (`exhaustive` CTest label, enabled in the `release` preset,
       about 16 s on 8+ cores).
-- [ ] **Container integration.** Storing FP16/BF16 elements needs a new
-      element type, a 2-byte shuffle and a format version bump. Until then
-      quantization is a standalone step and cannot be selected through
-      `Compressor`.
+- [x] **Container integration.** `CompressionOptions::quantization` selects
+      FP16 or BFloat16; the stream then stores 16-bit elements (format
+      version 2, with 16-bit predictor and 2-byte shuffle) and decompression
+      returns exactly `quantize_round_trip(data, format)`. Lossless streams
+      are still written as version 1.
 - [ ] NumPy `float16` cross-check (moves to Phase 5 with the Python API).
 - [ ] Written error report per benchmark dataset (needs real datasets).
 

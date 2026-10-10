@@ -4,10 +4,10 @@
 #include <cstring>
 #include <limits>
 
+#include "detail/block_pipeline.hpp"
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
-#include "detail/crc32c.hpp"
-#include "detail/transforms.hpp"
+#include "turbocore/decompressor.hpp"
 #include "turbocore/error.hpp"
 
 namespace turbocore {
@@ -15,6 +15,10 @@ namespace turbocore {
 namespace {
 
 const CompressionOptions& validated(const CompressionOptions& options) {
+  if (options.quantization.has_value() && *options.quantization != QuantFormat::Float16 &&
+      *options.quantization != QuantFormat::BFloat16) {
+    throw Error(ErrorCode::InvalidArgument, "unknown quantization format");
+  }
   if (options.predictor != Predictor::None && options.predictor != Predictor::Delta &&
       options.predictor != Predictor::Xor) {
     throw Error(ErrorCode::InvalidArgument, "unknown predictor");
@@ -43,8 +47,7 @@ std::vector<std::uint8_t> Compressor::compress(std::span<const float> data) cons
     throw Error(ErrorCode::InvalidArgument, "input needs more blocks than the format allows; raise block_elements");
   }
 
-  const std::size_t payload_offset = kHeaderSize + block_count * kIndexEntrySize;
-  std::vector<std::uint8_t> out(payload_offset);
+  std::vector<std::uint8_t> out(kHeaderSize + block_count * kIndexEntrySize);
   write_header(std::span<std::uint8_t, kHeaderSize>(out.data(), kHeaderSize),
                StreamInfo{
                    .element_count = data.size(),
@@ -52,55 +55,35 @@ std::vector<std::uint8_t> Compressor::compress(std::span<const float> data) cons
                    .block_elements = static_cast<std::uint32_t>(block_elements),
                    .predictor = options_.predictor,
                    .byte_shuffle = options_.byte_shuffle,
+                   .quantization = options_.quantization,
                });
 
   const DeflateCodec codec(options_.level);
-  std::vector<std::uint32_t> words;       // bit patterns of the block
-  std::vector<std::uint8_t> transformed;  // after predictor + shuffle
-  std::vector<std::uint8_t> packed;       // after the codec
 
-  for (std::size_t block = 0; block < block_count; ++block) {
-    const std::span<const float> chunk =
-        data.subspan(block * block_elements, std::min(block_elements, data.size() - block * block_elements));
-    const std::size_t byte_count = chunk.size() * kElementSize;
-
-    words.resize(chunk.size());
-    std::memcpy(words.data(), chunk.data(), byte_count);
-    const auto* word_bytes = reinterpret_cast<const std::uint8_t*>(words.data());
-    const std::uint32_t crc = crc32c({word_bytes, byte_count});
-
-    switch (options_.predictor) {
-      case Predictor::None:
-        break;
-      case Predictor::Delta:
-        delta_encode(words);
-        break;
-      case Predictor::Xor:
-        xor_encode(words);
-        break;
+  // `load` turns a chunk of input floats into the block's stored elements;
+  // everything after that is the same lossless pipeline for either width.
+  const auto encode_blocks = [&]<typename Word>(std::vector<Word>& words, auto&& load) {
+    BlockEncoder<Word> encoder(options_.predictor, options_.byte_shuffle, codec);
+    for (std::size_t block = 0; block < block_count; ++block) {
+      const std::size_t first = block * block_elements;
+      const std::span<const float> chunk = data.subspan(first, std::min(block_elements, data.size() - first));
+      words.resize(chunk.size());
+      load(chunk, std::span<Word>(words));
+      const IndexEntry entry = encoder.encode(words, out);
+      write_index_entry(out.data() + kHeaderSize + block * kIndexEntrySize, entry);
     }
+  };
 
-    transformed.resize(byte_count);
-    if (options_.byte_shuffle) {
-      shuffle_bytes(words, transformed);
-    } else {
-      std::memcpy(transformed.data(), words.data(), byte_count);
-    }
-
-    packed.clear();
-    codec.compress(transformed, packed);
-
-    // Incompressible blocks are stored verbatim so the stream never grows by
-    // more than the header and index.
-    const bool use_deflate = packed.size() < transformed.size();
-    const std::vector<std::uint8_t>& payload = use_deflate ? packed : transformed;
-    out.insert(out.end(), payload.begin(), payload.end());
-    write_index_entry(out.data() + kHeaderSize + block * kIndexEntrySize,
-                      IndexEntry{
-                          .compressed_size = static_cast<std::uint32_t>(payload.size()),
-                          .crc = crc,
-                          .method = use_deflate ? BlockMethod::Deflate : BlockMethod::Stored,
-                      });
+  if (options_.quantization.has_value()) {
+    std::vector<std::uint16_t> words;
+    encode_blocks(words, [&](std::span<const float> chunk, std::span<std::uint16_t> stored) {
+      quantize(chunk, stored, *options_.quantization);
+    });
+  } else {
+    std::vector<std::uint32_t> words;
+    encode_blocks(words, [](std::span<const float> chunk, std::span<std::uint32_t> stored) {
+      std::memcpy(stored.data(), chunk.data(), chunk.size_bytes());
+    });
   }
   return out;
 }

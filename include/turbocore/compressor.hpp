@@ -3,24 +3,34 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
 #include "turbocore/export.hpp"
+#include "turbocore/quantization.hpp"
 
 namespace turbocore {
 
-/// Decorrelation applied to the 32-bit patterns of consecutive floats before
+/// Decorrelation applied to the bit patterns of consecutive elements before
 /// entropy coding. Both predictors work on the integer bit pattern, never on
 /// the float value, so they are exactly reversible for every input including
 /// NaN payloads, signed zeros and subnormals.
 enum class Predictor : std::uint8_t {
   None = 0,
-  Delta = 1,  ///< bits[i] - bits[i-1], modulo 2^32
+  Delta = 1,  ///< bits[i] - bits[i-1], modulo 2^(element width)
   Xor = 2,    ///< bits[i] ^ bits[i-1]
 };
 
 struct CompressionOptions {
+  /// Lossy mode. When set, every value is first rounded to the given 16-bit
+  /// format (see quantization.hpp) and the stream stores 16-bit elements;
+  /// everything after that step is still lossless. Decompression returns the
+  /// rounded values, i.e. exactly quantize_round_trip(data, format).
+  /// analyze_quantization() reports what this costs for a given dataset.
+  /// Empty (the default) means lossless FP32.
+  std::optional<QuantFormat> quantization;
+
   Predictor predictor = Predictor::Delta;
 
   /// Regroup the data so that byte k of every element is contiguous. Sign and
@@ -36,8 +46,9 @@ struct CompressionOptions {
   std::size_t block_elements = 65536;
 };
 
-/// Lossless FP32 compressor: predictor -> byte shuffle -> DEFLATE, in
-/// independent blocks, each protected by a CRC-32C of the original data.
+/// FP32 compressor: [optional quantization ->] predictor -> byte shuffle ->
+/// DEFLATE, in independent blocks, each protected by a CRC-32C of the stored
+/// elements. Lossless unless CompressionOptions::quantization is set.
 class TURBOCORE_EXPORT Compressor {
  public:
   Compressor();
@@ -47,8 +58,9 @@ class TURBOCORE_EXPORT Compressor {
 
   [[nodiscard]] const CompressionOptions& options() const noexcept { return options_; }
 
-  /// Returns a self-describing stream that Decompressor::decompress() turns
-  /// back into the exact input bit patterns.
+  /// Returns a self-describing stream. Decompressor::decompress() turns it
+  /// back into the exact input bit patterns (lossless mode) or into the
+  /// input rounded to the quantization format (lossy mode).
   [[nodiscard]] std::vector<std::uint8_t> compress(std::span<const float> data) const;
 
  private:

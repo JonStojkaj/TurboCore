@@ -2,6 +2,7 @@
 #define TURBOCORE_DECOMPRESSOR_HPP
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -17,6 +18,8 @@ struct StreamInfo {
   std::uint32_t block_elements;
   Predictor predictor;
   bool byte_shuffle;
+  /// The 16-bit format the data was rounded to; empty for a lossless stream.
+  std::optional<QuantFormat> quantization;
 };
 
 /// Decoder for streams produced by Compressor. All input is treated as
@@ -28,6 +31,7 @@ class TURBOCORE_EXPORT Decompressor {
   /// Throws Error(UnsupportedFormat | CorruptStream).
   [[nodiscard]] static StreamInfo inspect(std::span<const std::uint8_t> stream);
 
+  /// Always returns FP32: a quantized stream is expanded back to float.
   /// Throws Error(UnsupportedFormat | CorruptStream | ChecksumMismatch).
   [[nodiscard]] std::vector<float> decompress(std::span<const std::uint8_t> stream) const;
 };

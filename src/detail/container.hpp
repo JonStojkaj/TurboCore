@@ -5,16 +5,21 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "turbocore/decompressor.hpp"
 
-// TurboCore container format, version 1. All integers are little-endian.
+// TurboCore container format. All integers are little-endian.
+//
+// Version 1 stores FP32 elements only. Version 2 has the same layout and adds
+// the 16-bit element types. The writer emits the lowest version that can
+// describe the stream, so lossless streams stay readable by version-1 readers.
 //
 //   Header (32 bytes)
 //     0   4  magic "TCOR"
-//     4   1  format version (1)
-//     5   1  element type (0 = IEEE 754 binary32)
+//     4   1  format version (1 or 2)
+//     5   1  element type (ElementType); version 1 allows only Float32
 //     6   1  predictor (turbocore::Predictor)
 //     7   1  flags (bit 0: byte shuffle; other bits zero)
 //     8   4  block_elements: elements per block
@@ -25,7 +30,8 @@
 //
 //   Block index (block_count entries of 12 bytes)
 //     0   4  compressed size of the block in bytes
-//     4   4  CRC-32C of the block's original (untransformed) element bytes
+//     4   4  CRC-32C of the block's stored elements before predictor and
+//            shuffle: the original FP32 data, or the quantized 16-bit values
 //     8   1  method (BlockMethod)
 //     9   3  reserved, zero
 //
@@ -36,20 +42,37 @@
 namespace turbocore::detail {
 
 inline constexpr std::array<std::uint8_t, 4> kMagic = {'T', 'C', 'O', 'R'};
-inline constexpr std::uint8_t kFormatVersion = 1;
-inline constexpr std::uint8_t kElementTypeFloat32 = 0;
+inline constexpr std::uint8_t kFormatVersionFloat32 = 1;
+inline constexpr std::uint8_t kFormatVersionQuantized = 2;
 inline constexpr std::uint8_t kFlagByteShuffle = 0x01;
 
 inline constexpr std::size_t kHeaderSize = 32;
 inline constexpr std::size_t kHeaderCrcOffset = 28;
 inline constexpr std::size_t kIndexEntrySize = 12;
-inline constexpr std::size_t kElementSize = 4;
 inline constexpr std::size_t kMaxBlockElements = std::size_t{1} << 24;
 
 /// The largest expansion a DEFLATE stream can achieve is 258 bytes per
 /// 2 bits, i.e. 1032:1. Used to reject headers that claim more data than
 /// the payload could possibly hold, before anything is allocated.
 inline constexpr std::uint64_t kMaxExpansionRatio = 1032;
+
+enum class ElementType : std::uint8_t {
+  Float32 = 0,
+  Float16 = 1,
+  BFloat16 = 2,
+};
+
+[[nodiscard]] constexpr ElementType element_type_of(const std::optional<QuantFormat>& quantization) noexcept {
+  if (!quantization.has_value()) {
+    return ElementType::Float32;
+  }
+  return *quantization == QuantFormat::Float16 ? ElementType::Float16 : ElementType::BFloat16;
+}
+
+/// Bytes per stored element.
+[[nodiscard]] constexpr std::size_t element_size_of(const std::optional<QuantFormat>& quantization) noexcept {
+  return quantization.has_value() ? 2 : 4;
+}
 
 enum class BlockMethod : std::uint8_t {
   Stored = 0,   ///< transformed bytes, verbatim

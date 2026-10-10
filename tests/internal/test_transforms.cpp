@@ -40,6 +40,47 @@ TEST(Transforms, ShuffleGroupsBytePlanes) {
   EXPECT_EQ(out, (std::vector<std::uint8_t>{0x11, 0x55, 0x22, 0x66, 0x33, 0x77, 0x44, 0x88}));
 }
 
+TEST(Transforms, SixteenBitVariantsMatchTheirDefinition) {
+  std::vector<std::uint16_t> delta = {10, 13, 5, 0xFFFF, 0};
+  d::delta_encode(delta);
+  EXPECT_EQ(delta, (std::vector<std::uint16_t>{10, 3, 0xFFF8, 0xFFFA, 1}));  // wraps modulo 2^16
+
+  std::vector<std::uint16_t> x = {0xF0F0, 0xF0F1, 0x0F0E};
+  d::xor_encode(x);
+  EXPECT_EQ(x, (std::vector<std::uint16_t>{0xF0F0, 0x0001, 0xFFFF}));
+
+  const std::vector<std::uint16_t> in = {0x2211, 0x4433, 0x6655};
+  std::vector<std::uint8_t> planes(6);
+  d::shuffle_bytes(in, planes);
+  EXPECT_EQ(planes, (std::vector<std::uint8_t>{0x11, 0x33, 0x55, 0x22, 0x44, 0x66}));
+}
+
+TEST(Transforms, SixteenBitVariantsAreExactlyReversible) {
+  for (const std::size_t n : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{1000}}) {
+    SCOPED_TRACE(n);
+    std::vector<std::uint16_t> original(n);
+    std::mt19937 rng(43);
+    for (std::uint16_t& value : original) {
+      value = static_cast<std::uint16_t>(rng() & 0xFFFFu);
+    }
+
+    std::vector<std::uint16_t> v = original;
+    d::delta_encode(v);
+    d::delta_decode(v);
+    EXPECT_EQ(v, original);
+
+    d::xor_encode(v);
+    d::xor_decode(v);
+    EXPECT_EQ(v, original);
+
+    std::vector<std::uint8_t> bytes(n * 2);
+    std::vector<std::uint16_t> restored(n);
+    d::shuffle_bytes(original, bytes);
+    d::unshuffle_bytes(bytes, restored);
+    EXPECT_EQ(restored, original);
+  }
+}
+
 TEST(Transforms, EveryTransformIsExactlyReversible) {
   for (const std::size_t n : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{1000}}) {
     SCOPED_TRACE(n);

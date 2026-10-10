@@ -3,10 +3,9 @@
 #include <algorithm>
 #include <cstring>
 
+#include "detail/block_pipeline.hpp"
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
-#include "detail/crc32c.hpp"
-#include "detail/transforms.hpp"
 #include "turbocore/error.hpp"
 
 namespace turbocore {
@@ -22,63 +21,39 @@ std::vector<float> Decompressor::decompress(std::span<const std::uint8_t> stream
 
   std::vector<float> out(element_count);
   const DeflateCodec codec;
-  std::vector<std::uint8_t> inflated;
-  std::vector<std::uint32_t> words;
 
-  std::size_t offset = kHeaderSize + std::size_t{info.block_count} * kIndexEntrySize;
-  for (std::size_t block = 0; block < info.block_count; ++block) {
-    const IndexEntry entry = parse_index_entry(stream.data() + kHeaderSize + block * kIndexEntrySize);
-    const std::size_t first_element = block * block_elements;
-    const std::size_t count = std::min(block_elements, element_count - first_element);
-    const std::size_t byte_count = count * kElementSize;
-
-    if (entry.compressed_size > stream.size() - offset) {
-      throw Error(ErrorCode::CorruptStream, "block extends past the end of the stream");
-    }
-    const std::span<const std::uint8_t> payload = stream.subspan(offset, entry.compressed_size);
-    offset += entry.compressed_size;
-
-    std::span<const std::uint8_t> transformed;
-    if (entry.method == BlockMethod::Stored) {
-      if (payload.size() != byte_count) {
-        throw Error(ErrorCode::CorruptStream, "stored block has the wrong size");
+  // `store` turns a block's decoded elements back into output floats.
+  const auto decode_blocks = [&]<typename Word>(std::vector<Word>& words, auto&& store) {
+    BlockDecoder<Word> decoder(info.predictor, info.byte_shuffle, codec);
+    std::size_t offset = kHeaderSize + std::size_t{info.block_count} * kIndexEntrySize;
+    for (std::size_t block = 0; block < info.block_count; ++block) {
+      const IndexEntry entry = parse_index_entry(stream.data() + kHeaderSize + block * kIndexEntrySize);
+      if (entry.compressed_size > stream.size() - offset) {
+        throw Error(ErrorCode::CorruptStream, "block extends past the end of the stream");
       }
-      transformed = payload;
-    } else {
-      inflated.resize(byte_count);
-      if (!codec.decompress(payload, inflated)) {
-        throw Error(ErrorCode::CorruptStream, "block is not a valid DEFLATE stream of the expected size");
-      }
-      transformed = inflated;
-    }
+      const std::span<const std::uint8_t> payload = stream.subspan(offset, entry.compressed_size);
+      offset += entry.compressed_size;
 
-    words.resize(count);
-    if (info.byte_shuffle) {
-      unshuffle_bytes(transformed, words);
-    } else {
-      std::memcpy(words.data(), transformed.data(), byte_count);
+      const std::size_t first = block * block_elements;
+      words.resize(std::min(block_elements, element_count - first));
+      decoder.decode(payload, entry, std::span<Word>(words));
+      store(std::span<const Word>(words), std::span<float>(out).subspan(first, words.size()));
     }
-
-    switch (info.predictor) {
-      case Predictor::None:
-        break;
-      case Predictor::Delta:
-        delta_decode(words);
-        break;
-      case Predictor::Xor:
-        xor_decode(words);
-        break;
+    if (offset != stream.size()) {
+      throw Error(ErrorCode::CorruptStream, "unexpected bytes after the last block");
     }
+  };
 
-    const auto* word_bytes = reinterpret_cast<const std::uint8_t*>(words.data());
-    if (crc32c({word_bytes, byte_count}) != entry.crc) {
-      throw Error(ErrorCode::ChecksumMismatch, "block checksum mismatch");
-    }
-    std::memcpy(out.data() + first_element, words.data(), byte_count);
-  }
-
-  if (offset != stream.size()) {
-    throw Error(ErrorCode::CorruptStream, "unexpected bytes after the last block");
+  if (info.quantization.has_value()) {
+    std::vector<std::uint16_t> words;
+    decode_blocks(words, [&](std::span<const std::uint16_t> stored, std::span<float> chunk) {
+      dequantize(stored, chunk, *info.quantization);
+    });
+  } else {
+    std::vector<std::uint32_t> words;
+    decode_blocks(words, [](std::span<const std::uint32_t> stored, std::span<float> chunk) {
+      std::memcpy(chunk.data(), stored.data(), stored.size_bytes());
+    });
   }
   return out;
 }

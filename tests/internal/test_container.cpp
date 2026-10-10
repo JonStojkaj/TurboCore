@@ -20,6 +20,7 @@ TEST(Container, HeaderRoundTrips) {
       .block_elements = 4096,
       .predictor = turbocore::Predictor::Xor,
       .byte_shuffle = true,
+      .quantization = turbocore::QuantFormat::BFloat16,
   };
   std::vector<std::uint8_t> stream(d::kHeaderSize);
   d::write_header(std::span<std::uint8_t, d::kHeaderSize>(stream.data(), d::kHeaderSize), written);
@@ -30,6 +31,7 @@ TEST(Container, HeaderRoundTrips) {
   EXPECT_EQ(parsed.block_elements, written.block_elements);
   EXPECT_EQ(parsed.predictor, written.predictor);
   EXPECT_EQ(parsed.byte_shuffle, written.byte_shuffle);
+  EXPECT_EQ(parsed.quantization, written.quantization);
 }
 
 TEST(Container, IntegersAreLittleEndian) {
@@ -53,6 +55,7 @@ TEST(Container, ImplausibleElementCountIsRejectedBeforeAllocating) {
       .block_elements = 1u << 24,
       .predictor = turbocore::Predictor::Delta,
       .byte_shuffle = true,
+      .quantization = {},
   };
   // Header plus a complete (all-zero) index, so that only the payload is missing.
   std::vector<std::uint8_t> stream(d::kHeaderSize + std::size_t{claim.block_count} * d::kIndexEntrySize);

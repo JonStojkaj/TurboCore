@@ -7,6 +7,7 @@ add_executable(turbocore_tests
   test_roundtrip.cpp
   test_corruption.cpp
   test_error_analysis.cpp
+  test_lossy.cpp
   test_quantization.cpp
 )
 target_link_libraries(turbocore_tests PRIVATE TurboCore::turbocore GTest::gtest_main)

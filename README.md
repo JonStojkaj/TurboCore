@@ -9,8 +9,8 @@ floating-point error-analysis module and Python bindings.
 - lossless FP32 compression (delta/XOR predictor, byte shuffle, DEFLATE) in a
   checksummed block container; single-threaded and not yet fast;
 - correctly rounded FP32 → FP16 / BFloat16 quantization with an error-analysis
-  module (ULP error, MSE, PSNR, NaN/Inf accounting). Quantized data cannot yet
-  be stored in the container.
+  module (ULP error, MSE, PSNR, NaN/Inf accounting), selectable as a lossy
+  mode of the compressor.
 
 The AVX2 and CUDA backends and the Python compression API are not implemented.
 See [plan.md](plan.md) for the architecture and roadmap.
@@ -30,6 +30,11 @@ turbocore::QuantizationReport report =
     turbocore::analyze_quantization(data, turbocore::QuantFormat::Float16);
 // report.error.psnr_db, report.error.mean_squared_error,
 // report.max_target_ulp_error (at most 0.5), report.error.overflow_to_infinity_count, ...
+
+// Lossy mode: round to FP16, then compress the 16-bit values losslessly.
+turbocore::Compressor lossy({.quantization = turbocore::QuantFormat::Float16});
+std::vector<float> approx = turbocore::Decompressor().decompress(lossy.compress(data));
+// approx == turbocore::quantize_round_trip(data, turbocore::QuantFormat::Float16), bit for bit.
 ```
 
 ## Building
