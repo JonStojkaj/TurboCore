@@ -123,7 +123,8 @@ std::vector<float> stress_floats(std::size_t n, std::uint32_t seed) {
         bits = static_cast<std::uint32_t>(rng());
         break;
       default:  // exponent fields 100..145: the binary16 range and both of its edges
-        bits = (static_cast<std::uint32_t>(rng()) & 0x807FFFFFu) | ((100u + rng() % 46u) << 23);
+        bits = (static_cast<std::uint32_t>(rng()) & 0x807FFFFFu) |
+               ((100u + static_cast<std::uint32_t>(rng() % 46u)) << 23);
         break;
     }
     v[i] = std::bit_cast<float>(bits);

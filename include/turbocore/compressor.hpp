@@ -30,7 +30,7 @@ struct CompressionOptions {
   /// rounded values, i.e. exactly quantize_round_trip(data, format).
   /// analyze_quantization() reports what this costs for a given dataset.
   /// Empty (the default) means lossless FP32.
-  std::optional<QuantFormat> quantization;
+  std::optional<QuantFormat> quantization = std::nullopt;
 
   Predictor predictor = Predictor::Delta;
 

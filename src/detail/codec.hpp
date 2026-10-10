@@ -19,7 +19,7 @@ struct CodecHints {
   /// segments of `segment_bytes` bytes in order (the GPU transform stage
   /// produces these as a by-product). Used only if it covers every segment
   /// exactly; otherwise the codec counts for itself.
-  std::span<const std::uint32_t> segment_histograms;
+  std::span<const std::uint32_t> segment_histograms = {};
 };
 
 /// A lossless byte-level entropy stage. Implementations are stateless across

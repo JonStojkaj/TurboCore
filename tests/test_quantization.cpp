@@ -251,8 +251,8 @@ TEST_P(AgainstReference, RandomValuesAcrossTheFloat16Range) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Formats, AgainstReference, ::testing::Values(QuantFormat::Float16, QuantFormat::BFloat16),
-                         [](const auto& info) {
-                           return info.param == QuantFormat::Float16 ? "Float16" : "BFloat16";
+                         [](const auto& param_info) {
+                           return param_info.param == QuantFormat::Float16 ? "Float16" : "BFloat16";
                          });
 
 // ---------------------------------------------------------------------------
