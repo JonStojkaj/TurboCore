@@ -1,6 +1,7 @@
 turbocore_require_benchmark()
 
 add_executable(turbocore_bench
+  bench_codec.cpp
   bench_memory_baseline.cpp
 )
 target_link_libraries(turbocore_bench PRIVATE TurboCore::turbocore benchmark::benchmark_main)

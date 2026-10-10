@@ -19,7 +19,15 @@ generate_export_header(turbocore
 target_sources(turbocore
   PRIVATE
     build_info.cpp
+    compressor.cpp
+    container.cpp
     cpu_features.cpp
+    crc32c.cpp
+    decompressor.cpp
+    deflate_decoder.cpp
+    deflate_encoder.cpp
+    huffman.cpp
+    transforms.cpp
   PUBLIC
     FILE_SET HEADERS
     BASE_DIRS
@@ -27,6 +35,9 @@ target_sources(turbocore
       "${_turbocore_generated_include}"
     FILES
       "${PROJECT_SOURCE_DIR}/include/turbocore/build_info.hpp"
+      "${PROJECT_SOURCE_DIR}/include/turbocore/compressor.hpp"
+      "${PROJECT_SOURCE_DIR}/include/turbocore/decompressor.hpp"
+      "${PROJECT_SOURCE_DIR}/include/turbocore/error.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/turbocore.hpp"
       "${_turbocore_generated_include}/turbocore/config.hpp"
       "${_turbocore_generated_include}/turbocore/export.hpp"

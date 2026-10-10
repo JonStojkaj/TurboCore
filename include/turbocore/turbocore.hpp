@@ -4,6 +4,9 @@
 // Umbrella header for the TurboCore public API.
 
 #include "turbocore/build_info.hpp"
+#include "turbocore/compressor.hpp"
 #include "turbocore/config.hpp"
+#include "turbocore/decompressor.hpp"
+#include "turbocore/error.hpp"
 
 #endif  // TURBOCORE_TURBOCORE_HPP

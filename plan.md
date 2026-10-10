@@ -6,7 +6,9 @@ CUDA), a floating-point error-analysis module for lossy quantization, and
 Python bindings. No external compression library is used anywhere in the
 library itself.
 
-Status: **Phase 0 complete.** Phases 1–5 are specified below and not started.
+Status: **Phase 0 complete. Phase 1 core implemented** (lossless 1D FP32 codec,
+single-threaded); the remaining Phase 1 items are listed in that section.
+Phases 2–5 are not started.
 
 ---
 
@@ -65,38 +67,51 @@ Why each stage exists:
 - **DEFLATE-style entropy stage.** Per-block Huffman tables are static once
   built, which makes blocks independent and therefore parallel.
 
-### 2.2 Decision: DEFLATE is the primary codec, LZW is secondary
+### 2.2 Decision: DEFLATE only; no LZW, no separate RLE
 
-The brief says "LZW / DEFLATE". The plan commits to **DEFLATE (LZ77 +
-canonical Huffman) as the primary codec** and treats LZW as an optional second
-codec behind the same interface.
-
-- LZW's dictionary is adaptive and inherently serial; it cannot be split
-  across GPU threads without restarting the dictionary, which destroys ratio.
-- DEFLATE separates match finding from entropy coding. Histogramming and
-  Huffman bit-packing parallelise well; that is where the GPU work goes.
-- Emitting **raw RFC 1951 streams** per block gives a free, independent test
-  oracle: Python's built-in `zlib.decompressobj(wbits=-15)` must be able to
-  decode every block TurboCore writes. This is a test-only cross-check and
-  does not violate the "no external compression library" rule for the library.
+- **LZW is dropped.** Its dictionary is adaptive and inherently serial; it
+  cannot be split across GPU threads without restarting the dictionary, which
+  destroys the ratio.
+- **DEFLATE (LZ77 + canonical Huffman) is the entropy stage.** It separates
+  match finding from entropy coding. Histogramming and Huffman bit-packing
+  parallelise well; that is where the GPU work goes.
+- **No separate RLE codec.** A run is an LZ77 match at distance 1, so DEFLATE
+  already covers it (100 000 zero bytes encode to under 200 bytes). A
+  dedicated RLE path is kept in reserve as a cheap GPU fast path for
+  near-constant byte planes if Phase 4 measurements justify it.
+- Blocks are **raw RFC 1951 streams**, which gives a free, independent test
+  oracle: zlib (via the Python standard library, in the test suite only) must
+  decode every block TurboCore writes, and TurboCore must decode what zlib
+  writes. The library itself links no compression library.
 
 ### 2.3 Container format (TCF, version 1)
 
+Implemented; the byte-level layout is documented in `src/detail/container.hpp`.
+
 | Section      | Contents |
 |--------------|----------|
-| File header  | magic `TCOR`, format version, element type (FP32/FP16/BF16), shape (up to 4 dims), predictor id, block size, block count |
-| Block index  | per block: byte offset, compressed size, raw size, CRC-32C of the raw bytes |
-| Blocks       | independent raw DEFLATE streams, or stored verbatim if incompressible |
+| File header (32 bytes) | magic `TCOR`, format version, element type, predictor, flags (byte shuffle), elements per block, element count, block count, CRC-32C of the header |
+| Block index (12 bytes per block) | compressed size, CRC-32C of the block's original bytes, method (stored or DEFLATE) |
+| Blocks       | independent raw DEFLATE streams, or the transformed bytes verbatim if DEFLATE does not shrink them |
 
 Independent blocks give random access, bounded memory, thread-level
-parallelism on the CPU and block-level parallelism on the GPU. The block size
-(default 256 KiB, tunable) trades ratio against parallelism and is a benchmark
-parameter, not a constant.
+parallelism on the CPU and block-level parallelism on the GPU. A block's
+offset is the prefix sum of the compressed sizes before it. The predictor and
+the LZ77 window reset at every block boundary. The block size (default 65 536
+elements = 256 KiB, tunable) trades ratio against parallelism and is a
+benchmark parameter, not a constant.
+
+Not yet in the format: array shape (needed for the 2D image predictor) and
+element types other than FP32 (needed for Phase 2). Both will be added under
+a new format version.
 
 ### 2.4 Backends and dispatch
 
-- Public API is object-oriented: `Compressor`, `Decompressor`, an abstract
-  `Codec`, and value types for options and reports.
+- Public API is object-oriented: `Compressor`, `Decompressor`, value types for
+  options and stream info, and a single exception type `turbocore::Error`
+  carrying an `ErrorCode`. Internally, an abstract `Codec` with a
+  `DeflateCodec` implementation; decoders are `noexcept` and report failure by
+  return value, and only the API boundary throws.
 - Hot inner loops are **not** virtual. Each backend fills a table of function
   pointers (`KernelTable`) once at start-up; `Backend::Auto` picks the best
   usable table using `runtime_support()`.
@@ -142,8 +157,8 @@ python/                   pybind11 extension + Python package
 |-------------|--------------------|--------|
 | macOS arm64 (development machine) | scalar backend, Python module, sanitizers | working |
 | macOS x86_64 under Rosetta 2 (`x86-rosetta` preset) | AVX2 backend **correctness** | working; needs `ROSETTA_ADVERTISE_AVX=1`, which the test preset sets |
-| Linux x86_64, native | AVX2 backend **performance** | not available locally — needs CI or a remote machine |
-| Linux x86_64 + NVIDIA GPU | CUDA backend, build and run | not available locally — **must be arranged before Phase 4** |
+| Linux x86_64 cloud instance, native | AVX2 backend **performance** | to be provisioned for the final benchmarks |
+| Linux GPU VM (AWS / RunPod) or GitHub Actions | CUDA backend, build and run | to be provisioned; until then CUDA code is written locally and cannot be compiled |
 
 Rosetta numbers are not performance evidence. Every AVX2 throughput figure in
 the final report must come from native x86 hardware.
@@ -177,51 +192,77 @@ machine is `cmake --preset cuda && cmake --build --preset cuda && ctest --preset
 
 ---
 
-## Phase 1 — Scalar reference codec
+## Phase 1 — Scalar reference codec (core implemented)
 
 The scalar implementation is the specification. Every later backend is tested
 against it, so it is written for clarity and correctness first.
 
-Steps:
+Done:
 
-1. **Core types.** `Span`-based buffer views, `Shape`, `Status`/error type
-   (no exceptions across the hot path), `Options`.
-2. **Bit I/O.** LSB-first `BitWriter` / `BitReader` with 64-bit accumulators
-   and explicit bounds checking on the reader.
-3. **CRC-32C.** Table-driven scalar implementation (hardware version comes in
-   Phase 3).
-4. **Predictors.** 1D delta and XOR on `uint32` bit patterns; 2D left/up
-   predictor for images. Forward and inverse, each exactly reversible.
-5. **Byte-plane shuffle** and unshuffle for 2- and 4-byte elements.
-6. **Huffman.** Histogram → length-limited code lengths (package-merge, max
-   15 bits) → canonical codes → table-driven decoder.
-7. **LZ77.** Hash-chain match finder, 32 KiB window, lazy matching, with
-   compression levels mapped to chain depth.
-8. **DEFLATE block encoder/decoder.** Stored, fixed and dynamic blocks per
-   RFC 1951. The decoder treats all input as untrusted.
-9. **Container.** TCF header, block index, per-block CRC, `Compressor` /
-   `Decompressor` classes, multi-threaded over blocks with `std::thread`.
-10. **Optional: LZW codec** behind the `Codec` interface, variable code width
-    9–16 bits, for a ratio/speed comparison against DEFLATE.
-11. **HDR image I/O.** Minimal PFM reader/writer (trivial format, no
-    dependency) so real HDR images can be used in tests and demos.
+- [x] **Public API.** `Compressor`, `Decompressor`, `CompressionOptions`,
+      `StreamInfo`, `Error`.
+- [x] **Bit I/O.** LSB-first `BitWriter` / `BitReader` with 64-bit
+      accumulators; the reader latches an overrun flag instead of reading out
+      of bounds.
+- [x] **CRC-32C.** Slicing-by-8 scalar implementation.
+- [x] **Predictors.** 1D delta and XOR on `uint32` bit patterns, exactly
+      reversible.
+- [x] **Byte-plane shuffle** and unshuffle for 4-byte elements.
+- [x] **Huffman.** Length-limited code lengths (Huffman tree plus Kraft-sum
+      repair, 15-bit and 7-bit limits), canonical codes, table-driven decoder
+      with a 10-bit fast path.
+- [x] **LZ77.** Greedy hash-chain match finder, 32 KiB window; levels 1–9 map
+      to chain depth.
+- [x] **DEFLATE.** Encoder emits fixed or dynamic blocks, whichever is
+      smaller. Decoder handles stored, fixed and dynamic blocks and multiple
+      blocks per stream, and treats all input as untrusted.
+- [x] **Container.** TCF v1 with per-block CRC and stored-block fallback.
+- [x] **Tests.** Bit-exact round trips over every predictor × shuffle × level
+      combination, on empty input, single elements, constants, ramps, noise,
+      random bit patterns, NaN payloads (quiet and signalling), ±0, ±Inf and
+      subnormals, and every size around block boundaries; zlib interop in both
+      directions; exhaustive truncation and single-bit-flip tests on a whole
+      stream; malformed-DEFLATE tests. All run under ASan + UBSan on arm64 and
+      under Rosetta.
+- [x] **Baseline benchmark** (`bench_codec.cpp`): GB/s and ratio per dataset
+      and level.
 
-Tests:
+Still open in Phase 1:
 
-- Round trip on: empty input, one element, constants, ramps, white noise,
-  all-NaN, mixed NaN payloads, ±0, ±Inf, subnormals, sizes straddling block
-  boundaries.
-- Every emitted block decodes with Python `zlib` (raw mode) to the same bytes.
-- TurboCore's decoder decodes streams produced by Python `zlib`.
-- Corrupt-input tests: truncation, bit flips, bad lengths → clean error, no
-  crash, no out-of-bounds read under ASan.
-- A libFuzzer target for the decoder.
+1. **Multi-threading over blocks** with `std::thread`. The codec is currently
+   single-threaded; blocks are already independent, so this is mechanical.
+2. **Lazy matching** in LZ77 (defer a match if the next position has a longer
+   one), for better ratio at higher levels.
+3. **Array shape in the header and a 2D left/up predictor** for images.
+4. **HDR image I/O.** Minimal PFM reader/writer (trivial format, no
+   dependency) so real HDR images can be used in tests and demos.
+5. **A libFuzzer target** for the decoder.
+6. **Encoder speed on noisy data.** Long hash chains on near-random byte
+   planes are the bottleneck (see baseline numbers). Options: skip the LZ77
+   search for planes whose histogram is near-uniform, or Huffman-only blocks.
 
-Exit criteria:
+Baseline numbers (Apple Silicon, scalar, single thread, 16 MiB of FP32,
+default 256 KiB blocks; development-machine figures, not the final report):
 
-- All of the above pass under ASan + UBSan on arm64 and under Rosetta.
-- Compression ratio and GB/s recorded for each pipeline stage on the benchmark
-  datasets, to establish the baseline the later phases are measured against.
+| Dataset | Level | Ratio | Compress | Decompress |
+|---------|-------|-------|----------|------------|
+| Smooth synthetic field | 1 | 12.5 | 234 MiB/s | 323 MiB/s |
+| Smooth synthetic field | 6 | 13.0 | 151 MiB/s | 350 MiB/s |
+| Smooth signal + noise  | 1 | 1.51 | 70 MiB/s  | 191 MiB/s |
+| Smooth signal + noise  | 6 | 1.57 | 19 MiB/s  | 223 MiB/s |
+| Smooth signal + noise  | 9 | 1.59 | 4 MiB/s   | 233 MiB/s |
+| Random bit patterns    | any | 1.00 | 61 MiB/s | 1.4 GiB/s |
+
+The smooth field is a best case for the predictor and not representative of
+real data. Throughput is two to three orders of magnitude below the `memcpy`
+ceiling, as expected for a clarity-first scalar reference; closing that gap is
+what Phases 3 and 4 are for.
+
+Exit criteria for the rest of Phase 1:
+
+- Open items 1–5 done, with the same tests passing under ASan + UBSan.
+- Ratio and GB/s recorded on at least one real dataset (HDR image or public
+  scientific data), not only synthetic ones.
 
 ---
 
@@ -335,8 +376,12 @@ Exit criteria:
 
 ## Phase 4 — CUDA backend
 
-**Prerequisite:** access to a Linux machine with an NVIDIA GPU. Step 1 is
-validating the untested Phase 0 CUDA build path.
+**Environment:** a Linux GPU VM (AWS / RunPod) or GitHub Actions. CUDA code is
+written on the arm64 development machine, where it cannot be compiled, so it
+is reviewed statically and kept behind the existing build-time gate until
+deployment. The first step on the GPU machine is validating the untested
+Phase 0 CUDA build path; until that has happened, no CUDA code counts as
+working.
 
 Realistic scope: full GPU DEFLATE at nvCOMP's level is a research-grade
 problem. The phase is staged so that each stage is independently useful and
@@ -430,18 +475,17 @@ Exit criteria:
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| No NVIDIA hardware available | Phase 4 cannot be built or run | Arrange access before Phase 3 ends; CUDA compile-only CI job catches build breaks earlier |
+| CUDA code written without a compiler | Bugs accumulate unseen until deployment | Keep kernels small and mirrored 1:1 on the scalar reference; add a CUDA compile-only CI job (`nvidia/cuda` container, no GPU needed) as early as possible |
 | GPU LZ77 underperforms | Headline GPU number is weak | Hybrid fallback (Phase 4, step 8); report honestly either way |
 | PCIe transfer dominates for small inputs | GPU slower end to end | Report the crossover size; `Auto` backend picks CPU below it |
 | Low mantissa bytes are incompressible | Lossless ratio on noisy data is modest | Expected and stated; the lossy quantization path is the answer for those datasets |
 | AVX2 numbers measured under Rosetta | Invalid performance claims | Rosetta is correctness-only; performance from native x86 only |
 | Decoder fed malicious input | Memory-safety bugs | Bounds-checked reader, sanitizers, fuzzing from Phase 1 |
 
-## Open questions
+## Decisions log
 
-1. Which machine will run the CUDA backend (university cluster, cloud
-   instance, personal workstation)? This gates Phase 4.
-2. Is LZW required as a deliverable, or is DEFLATE-primary with LZW optional
-   (section 2.2) acceptable?
-3. Is a native x86 Linux machine available for AVX2 benchmarks, or will CI
-   runners be the source of those numbers?
+| Question | Decision |
+|----------|----------|
+| Where does the CUDA backend run? | Dedicated Linux GPU VM (AWS / RunPod) or GitHub Actions, provisioned later. Code is written locally first. |
+| LZW? | Dropped. Delta/XOR predictor followed by DEFLATE; RLE is subsumed by LZ77 (section 2.2). |
+| Where do AVX2 performance numbers come from? | A native x86 Linux cloud instance. Rosetta 2 is sufficient for local correctness. |

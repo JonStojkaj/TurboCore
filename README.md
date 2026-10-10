@@ -4,8 +4,22 @@ A standalone C++20 library for high-performance compression of 32-bit
 floating-point data and HDR images, with scalar, AVX2 and CUDA backends, a
 floating-point error-analysis module and Python bindings.
 
-**Status:** build system and scaffolding only (Phase 0). No compression code
-exists yet. See [plan.md](plan.md) for the architecture and roadmap.
+**Status:** the scalar reference codec works: lossless FP32 compression
+(delta/XOR predictor, byte shuffle, DEFLATE) with a checksummed block
+container. It is single-threaded and not yet fast. The AVX2 and CUDA backends,
+the quantization/error-analysis module and the Python compression API are not
+implemented. See [plan.md](plan.md) for the architecture and roadmap.
+
+## Usage
+
+```cpp
+#include <turbocore/turbocore.hpp>
+
+std::vector<float> data = /* ... */;
+std::vector<std::uint8_t> stream = turbocore::Compressor().compress(data);
+std::vector<float> restored = turbocore::Decompressor().decompress(stream);
+// restored is bit-identical to data, including NaN payloads and signed zeros.
+```
 
 ## Building
 
