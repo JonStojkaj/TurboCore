@@ -7,6 +7,7 @@
 #include "detail/block_pipeline.hpp"
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
+#include "detail/kernels.hpp"
 #include "turbocore/decompressor.hpp"
 #include "turbocore/error.hpp"
 
@@ -29,6 +30,7 @@ const CompressionOptions& validated(const CompressionOptions& options) {
   if (options.block_elements == 0 || options.block_elements > detail::kMaxBlockElements) {
     throw Error(ErrorCode::InvalidArgument, "block_elements must be between 1 and 2^24");
   }
+  (void)detail::select_kernels(options.backend);  // throws if the backend cannot run here
   return options;
 }
 
@@ -59,11 +61,12 @@ std::vector<std::uint8_t> Compressor::compress(std::span<const float> data) cons
                });
 
   const DeflateCodec codec(options_.level);
+  const KernelTable& kernels = select_kernels(options_.backend);
 
   // `load` turns a chunk of input floats into the block's stored elements;
   // everything after that is the same lossless pipeline for either width.
   const auto encode_blocks = [&]<typename Word>(std::vector<Word>& words, auto&& load) {
-    BlockEncoder<Word> encoder(options_.predictor, options_.byte_shuffle, codec);
+    BlockEncoder<Word> encoder(kernels, options_.predictor, options_.byte_shuffle, codec);
     for (std::size_t block = 0; block < block_count; ++block) {
       const std::size_t first = block * block_elements;
       const std::span<const float> chunk = data.subspan(first, std::min(block_elements, data.size() - first));
@@ -77,7 +80,7 @@ std::vector<std::uint8_t> Compressor::compress(std::span<const float> data) cons
   if (options_.quantization.has_value()) {
     std::vector<std::uint16_t> words;
     encode_blocks(words, [&](std::span<const float> chunk, std::span<std::uint16_t> stored) {
-      quantize(chunk, stored, *options_.quantization);
+      quantize(kernels, chunk, stored, *options_.quantization);
     });
   } else {
     std::vector<std::uint32_t> words;

@@ -7,6 +7,7 @@
 #include <span>
 #include <vector>
 
+#include "turbocore/backend.hpp"
 #include "turbocore/export.hpp"
 #include "turbocore/quantization.hpp"
 
@@ -44,6 +45,9 @@ struct CompressionOptions {
   /// Elements per independently decodable block (1 to 2^24). Predictor state
   /// and the LZ77 window reset at every block boundary.
   std::size_t block_elements = 65536;
+
+  /// Implementation to run. Has no effect on the output bytes.
+  Backend backend = Backend::Auto;
 };
 
 /// FP32 compressor: [optional quantization ->] predictor -> byte shuffle ->
@@ -53,7 +57,8 @@ class TURBOCORE_EXPORT Compressor {
  public:
   Compressor();
 
-  /// Throws Error(InvalidArgument) if the options are out of range.
+  /// Throws Error(InvalidArgument) if the options are out of range, or
+  /// Error(BackendUnavailable) if the requested backend cannot run here.
   explicit Compressor(const CompressionOptions& options);
 
   [[nodiscard]] const CompressionOptions& options() const noexcept { return options_; }

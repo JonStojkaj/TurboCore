@@ -13,6 +13,7 @@ enum class ErrorCode {
   UnsupportedFormat,  ///< Not a TurboCore stream, or a version this build cannot read.
   CorruptStream,      ///< The stream is structurally invalid or truncated.
   ChecksumMismatch,   ///< The stream decoded, but the data fails its CRC-32C.
+  BackendUnavailable, ///< The requested backend is not compiled in or not supported by this CPU.
 };
 
 /// The single exception type thrown across the public API.

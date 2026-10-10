@@ -8,8 +8,10 @@ library itself.
 
 Status: **Phase 0 complete. Phase 1 core implemented** (lossless 1D FP32 codec,
 single-threaded). **Phase 2 implemented** (quantizers, error metrics, lossy mode in the
-container; exhaustively verified).
-Phases 3–5 are not started.
+container; exhaustively verified). **Phase 3 started**: AVX2 transform,
+quantization and CRC kernels are implemented and verified bit-identical under
+Rosetta 2, with no native x86 performance numbers yet. Phases 4–5 are not
+started.
 
 ---
 
@@ -355,7 +357,42 @@ Exit criteria:
 
 ---
 
-## Phase 3 — AVX2 backend
+## Phase 3 — AVX2 backend (transform and quantization kernels implemented)
+
+Status:
+
+- [x] **Dispatch.** `KernelTable` of function pointers per backend, selected
+      per operation through `Backend::{Auto, Scalar, Avx2}` on
+      `CompressionOptions`, `Decompressor` and the array quantization API.
+      Requesting an unavailable backend throws `Error(BackendUnavailable)`.
+- [x] **Predictors** (delta and XOR, 32- and 16-bit): element-wise encode,
+      in-register prefix scan with a carried lane for decode.
+- [x] **Byte-plane shuffle / unshuffle** (4- and 2-byte elements).
+- [x] **Quantization:** FP32 ↔ FP16 with F16C, FP32 ↔ BFloat16 with integer
+      rounding arithmetic.
+- [x] **CRC-32C** with the SSE4.2 `crc32` instruction.
+- [x] **Verification:** every kernel bit-identical to scalar for all lengths
+      0–100 and beyond, at three offsets from vector alignment, with
+      out-of-bounds canaries; compressed streams byte-identical between
+      backends for every option combination; AVX2 quantization identical to
+      scalar for all 2³² inputs. All of it run under Rosetta 2.
+- [ ] **Native x86 measurements.** No AVX2 number exists yet: Rosetta timings
+      are meaningless (emulated AVX2 runs *slower* than scalar there).
+      `bench_kernels.cpp` is ready to run on the x86 cloud instance.
+- [ ] Error metrics, histogram, entropy stage (steps 5–7 below).
+
+**What the first measurements say about priorities.** On the arm64
+development machine the *scalar* transform kernels (auto-vectorised by the
+compiler) already run at 12–65 GiB/s, while the codec as a whole compresses at
+0.02–0.23 GiB/s. The transforms are therefore under 2 % of compression time,
+and vectorising them cannot move end-to-end compression throughput. The
+kernels where SIMD should matter are the slow scalar ones: FP16 quantization
+(1.8 GiB/s scalar), CRC-32C (1.8 GiB/s scalar, and the limiting step when
+decoding stored blocks), and BFloat16 quantization (4.2 GiB/s). End-to-end
+compression speed is decided by LZ77 and Huffman coding, so the next work
+that pays off is, in order: multi-threading over blocks, skipping the LZ77
+search on high-entropy byte planes, and only then SIMD inside the entropy
+stage (step 7).
 
 Steps:
 

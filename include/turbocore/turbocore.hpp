@@ -3,6 +3,7 @@
 
 // Umbrella header for the TurboCore public API.
 
+#include "turbocore/backend.hpp"
 #include "turbocore/build_info.hpp"
 #include "turbocore/compressor.hpp"
 #include "turbocore/config.hpp"

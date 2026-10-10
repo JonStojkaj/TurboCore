@@ -12,7 +12,11 @@ floating-point error-analysis module and Python bindings.
   module (ULP error, MSE, PSNR, NaN/Inf accounting), selectable as a lossy
   mode of the compressor.
 
-The AVX2 and CUDA backends and the Python compression API are not implemented.
+An AVX2 backend covers the predictors, byte shuffle, quantization and CRC. It
+is verified bit-identical to the scalar code (under Rosetta 2) but has not been
+benchmarked on native x86 yet, and the DEFLATE stage, which dominates run
+time, is still scalar. The CUDA backend and the Python compression API are not
+implemented.
 See [plan.md](plan.md) for the architecture and roadmap.
 
 ## Usage

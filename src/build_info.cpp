@@ -4,11 +4,8 @@
 #include <climits>
 #include <limits>
 
-#include "detail/cpu_features.hpp"
+#include "detail/kernels.hpp"
 
-#if TURBOCORE_HAS_AVX2
-#include "backends/avx2/probe_avx2.hpp"
-#endif
 #if TURBOCORE_HAS_CUDA
 #include "backends/cuda/probe_cuda.hpp"
 #endif
@@ -32,11 +29,7 @@ BuildInfo build_info() noexcept {
 
 RuntimeSupport runtime_support() noexcept {
   RuntimeSupport support{.avx2_usable = false, .cuda_device_count = 0};
-#if TURBOCORE_HAS_AVX2
-  // The probe executes real AVX2 instructions, so it must stay behind the
-  // CPUID check.
-  support.avx2_usable = detail::cpu_supports_avx2_backend() && detail::avx2::toolchain_probe();
-#endif
+  support.avx2_usable = detail::avx2_kernels() != nullptr;
 #if TURBOCORE_HAS_CUDA
   support.cuda_device_count = detail::cuda::device_count();
 #endif

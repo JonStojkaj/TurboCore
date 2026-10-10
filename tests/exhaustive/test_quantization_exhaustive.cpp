@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "backend_support.hpp"
 #include "quantization_reference.hpp"
 #include "turbocore/turbocore.hpp"
 
@@ -98,6 +99,49 @@ TEST(ExhaustiveQuantization, ErrorNeverExceedsHalfATargetUlp) {
       return (error < 0 ? -error : error) <= 0.5 * turbocore::target_ulp(x, format);
     });
     EXPECT_EQ(failure, kNoFailure) << "first failing FP32 pattern: 0x" << std::hex << failure;
+  }
+}
+
+// The AVX2 quantizers against the scalar reference for every input, through
+// the array API in vector-sized batches so each pattern is seen in a lane of
+// a full vector. Runs on native x86, or under Rosetta 2 from an x86_64 build.
+TEST(ExhaustiveQuantization, Avx2IsBitIdenticalToScalarForAllInputs) {
+  TURBOCORE_NEEDS_AVX2();
+  constexpr std::uint64_t kBatch = 1 << 12;
+  for (const QuantFormat format : {QuantFormat::Float16, QuantFormat::BFloat16}) {
+    const unsigned thread_count = std::max(1u, std::thread::hardware_concurrency());
+    std::atomic<std::uint64_t> failure{kNoFailure};
+    std::vector<std::thread> threads;
+    for (unsigned t = 0; t < thread_count; ++t) {
+      threads.emplace_back([&, t] {
+        const std::uint64_t batches = kPatternCount / kBatch;
+        std::vector<float> in(kBatch);
+        std::vector<std::uint16_t> scalar(kBatch);
+        std::vector<std::uint16_t> avx2(kBatch);
+        for (std::uint64_t batch = batches * t / thread_count; batch < batches * (t + 1) / thread_count; ++batch) {
+          for (std::uint64_t i = 0; i < kBatch; ++i) {
+            in[i] = std::bit_cast<float>(static_cast<std::uint32_t>(batch * kBatch + i));
+          }
+          turbocore::quantize(in, scalar, format, turbocore::Backend::Scalar);
+          turbocore::quantize(in, avx2, format, turbocore::Backend::Avx2);
+          if (scalar != avx2) {
+            for (std::uint64_t i = 0; i < kBatch; ++i) {
+              if (scalar[i] != avx2[i]) {
+                std::uint64_t seen = failure.load();
+                const std::uint64_t pattern = batch * kBatch + i;
+                while (pattern < seen && !failure.compare_exchange_weak(seen, pattern)) {
+                }
+                return;
+              }
+            }
+          }
+        }
+      });
+    }
+    for (std::thread& thread : threads) {
+      thread.join();
+    }
+    EXPECT_EQ(failure.load(), kNoFailure) << "first differing FP32 pattern: 0x" << std::hex << failure.load();
   }
 }
 

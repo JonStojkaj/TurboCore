@@ -27,6 +27,12 @@ struct StreamInfo {
 /// bounds.
 class TURBOCORE_EXPORT Decompressor {
  public:
+  /// Throws Error(BackendUnavailable) if `backend` cannot run here. Any
+  /// backend decodes streams written by any other.
+  explicit Decompressor(Backend backend = Backend::Auto);
+
+  [[nodiscard]] Backend backend() const noexcept { return backend_; }
+
   /// Validates and returns the header without decoding any block.
   /// Throws Error(UnsupportedFormat | CorruptStream).
   [[nodiscard]] static StreamInfo inspect(std::span<const std::uint8_t> stream);
@@ -34,6 +40,9 @@ class TURBOCORE_EXPORT Decompressor {
   /// Always returns FP32: a quantized stream is expanded back to float.
   /// Throws Error(UnsupportedFormat | CorruptStream | ChecksumMismatch).
   [[nodiscard]] std::vector<float> decompress(std::span<const std::uint8_t> stream) const;
+
+ private:
+  Backend backend_;
 };
 
 }  // namespace turbocore

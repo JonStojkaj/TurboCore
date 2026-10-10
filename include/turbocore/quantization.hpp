@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "turbocore/backend.hpp"
 #include "turbocore/export.hpp"
 
 // Lossy precision reduction of FP32 data to a 16-bit floating-point format.
@@ -50,17 +51,25 @@ enum class QuantFormat : std::uint8_t {
 /// BFloat16 bit pattern -> FP32: the 16 bits followed by 16 zero bits. Exact.
 [[nodiscard]] TURBOCORE_EXPORT float bfloat16_bits_to_float32(std::uint16_t bits) noexcept;
 
+// The array functions below produce, element for element, exactly what the
+// scalar functions above produce, on every backend.
+
 /// Element-wise FP32 -> `format`.
-/// Throws Error(InvalidArgument) if the spans differ in length.
-TURBOCORE_EXPORT void quantize(std::span<const float> in, std::span<std::uint16_t> out, QuantFormat format);
+/// Throws Error(InvalidArgument) if the spans differ in length, or
+/// Error(BackendUnavailable).
+TURBOCORE_EXPORT void quantize(std::span<const float> in, std::span<std::uint16_t> out, QuantFormat format,
+                               Backend backend = Backend::Auto);
 
 /// Element-wise `format` -> FP32.
-/// Throws Error(InvalidArgument) if the spans differ in length.
-TURBOCORE_EXPORT void dequantize(std::span<const std::uint16_t> in, std::span<float> out, QuantFormat format);
+/// Throws Error(InvalidArgument) if the spans differ in length, or
+/// Error(BackendUnavailable).
+TURBOCORE_EXPORT void dequantize(std::span<const std::uint16_t> in, std::span<float> out, QuantFormat format,
+                                 Backend backend = Backend::Auto);
 
 /// quantize() followed by dequantize(): the FP32 values a consumer of the
 /// quantized data would actually see.
-[[nodiscard]] TURBOCORE_EXPORT std::vector<float> quantize_round_trip(std::span<const float> in, QuantFormat format);
+[[nodiscard]] TURBOCORE_EXPORT std::vector<float> quantize_round_trip(std::span<const float> in, QuantFormat format,
+                                                                      Backend backend = Backend::Auto);
 
 }  // namespace turbocore
 

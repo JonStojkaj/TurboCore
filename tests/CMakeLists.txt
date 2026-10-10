@@ -3,6 +3,7 @@ include(GoogleTest)
 
 # --- Public API tests: link only what a consumer would. ---------------------
 add_executable(turbocore_tests
+  test_backend.cpp
   test_build_info.cpp
   test_roundtrip.cpp
   test_corruption.cpp
@@ -29,10 +30,11 @@ if(NOT BUILD_SHARED_LIBS)
     internal/test_crc32c.cpp
     internal/test_deflate.cpp
     internal/test_huffman.cpp
+    internal/test_kernels.cpp
     internal/test_transforms.cpp
   )
   target_link_libraries(turbocore_internal_tests PRIVATE TurboCore::turbocore GTest::gtest_main)
-  target_include_directories(turbocore_internal_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_include_directories(turbocore_internal_tests PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
   turbocore_configure_target(turbocore_internal_tests)
   gtest_discover_tests(turbocore_internal_tests
     DISCOVERY_MODE PRE_TEST

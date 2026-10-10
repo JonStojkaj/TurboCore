@@ -10,8 +10,7 @@
 
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
-#include "detail/crc32c.hpp"
-#include "detail/transforms.hpp"
+#include "detail/kernels.hpp"
 #include "turbocore/compressor.hpp"
 #include "turbocore/error.hpp"
 
@@ -21,42 +20,39 @@
 //   encode: words -> CRC -> predictor -> byte shuffle -> codec -> payload
 //   decode: payload -> codec -> byte unshuffle -> predictor -> CRC check -> words
 //
-// Both classes own their scratch buffers, so one instance reused across the
-// blocks of a stream allocates only once.
+// The data-parallel steps (CRC, predictor, shuffle) go through a KernelTable,
+// so the same code runs on whichever backend was selected. Both classes own
+// their scratch buffers, so one instance reused across the blocks of a stream
+// allocates only once.
 
 namespace turbocore::detail {
 
 template <std::unsigned_integral Word>
-[[nodiscard]] std::span<const std::uint8_t> bytes_of(std::span<const Word> words) noexcept {
-  return {reinterpret_cast<const std::uint8_t*>(words.data()), words.size_bytes()};
-}
-
-template <std::unsigned_integral Word>
 class BlockEncoder {
  public:
-  BlockEncoder(Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
-      : predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
+  BlockEncoder(const KernelTable& kernels, Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
+      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
 
   /// Appends the block's payload to `out` and returns its index entry.
   /// `words` is used as working storage and holds garbage afterwards.
   IndexEntry encode(std::span<Word> words, std::vector<std::uint8_t>& out) {
     const std::size_t byte_count = words.size_bytes();
-    const std::uint32_t crc = crc32c(bytes_of<Word>(words));
+    const std::uint32_t crc = kernels_.crc32c(reinterpret_cast<const std::uint8_t*>(words.data()), byte_count);
 
     switch (predictor_) {
       case Predictor::None:
         break;
       case Predictor::Delta:
-        delta_encode(words);
+        delta_encode(kernels_, words);
         break;
       case Predictor::Xor:
-        xor_encode(words);
+        xor_encode(kernels_, words);
         break;
     }
 
     transformed_.resize(byte_count);
     if (byte_shuffle_) {
-      shuffle_bytes(std::span<const Word>(words), transformed_);
+      shuffle_bytes(kernels_, std::span<const Word>(words), transformed_);
     } else {
       std::memcpy(transformed_.data(), words.data(), byte_count);
     }
@@ -77,6 +73,7 @@ class BlockEncoder {
   }
 
  private:
+  const KernelTable& kernels_;
   Predictor predictor_;
   bool byte_shuffle_;
   const Codec& codec_;
@@ -87,8 +84,8 @@ class BlockEncoder {
 template <std::unsigned_integral Word>
 class BlockDecoder {
  public:
-  BlockDecoder(Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
-      : predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
+  BlockDecoder(const KernelTable& kernels, Predictor predictor, bool byte_shuffle, const Codec& codec) noexcept
+      : kernels_(kernels), predictor_(predictor), byte_shuffle_(byte_shuffle), codec_(codec) {}
 
   /// Fills `words` from the block's payload.
   /// Throws Error(CorruptStream | ChecksumMismatch).
@@ -110,7 +107,7 @@ class BlockDecoder {
     }
 
     if (byte_shuffle_) {
-      unshuffle_bytes(transformed, words);
+      unshuffle_bytes(kernels_, transformed, words);
     } else {
       std::memcpy(words.data(), transformed.data(), byte_count);
     }
@@ -119,19 +116,20 @@ class BlockDecoder {
       case Predictor::None:
         break;
       case Predictor::Delta:
-        delta_decode(words);
+        delta_decode(kernels_, words);
         break;
       case Predictor::Xor:
-        xor_decode(words);
+        xor_decode(kernels_, words);
         break;
     }
 
-    if (crc32c(bytes_of<Word>(words)) != entry.crc) {
+    if (kernels_.crc32c(reinterpret_cast<const std::uint8_t*>(words.data()), byte_count) != entry.crc) {
       throw Error(ErrorCode::ChecksumMismatch, "block checksum mismatch");
     }
   }
 
  private:
+  const KernelTable& kernels_;
   Predictor predictor_;
   bool byte_shuffle_;
   const Codec& codec_;

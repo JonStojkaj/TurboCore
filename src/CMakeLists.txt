@@ -28,6 +28,7 @@ target_sources(turbocore
     deflate_encoder.cpp
     error_analysis.cpp
     huffman.cpp
+    kernels.cpp
     quantization.cpp
     transforms.cpp
   PUBLIC
@@ -36,6 +37,7 @@ target_sources(turbocore
       "${PROJECT_SOURCE_DIR}/include"
       "${_turbocore_generated_include}"
     FILES
+      "${PROJECT_SOURCE_DIR}/include/turbocore/backend.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/build_info.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/compressor.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/decompressor.hpp"
@@ -74,6 +76,7 @@ endfunction()
 
 if(TURBOCORE_HAS_AVX2)
   _turbocore_add_backend(turbocore_avx2
+    backends/avx2/kernels_avx2.cpp
     backends/avx2/probe_avx2.cpp
   )
   target_compile_features(turbocore_avx2 PRIVATE cxx_std_20)

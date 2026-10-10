@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstddef>
 
+#include "detail/kernels.hpp"
 #include "turbocore/error.hpp"
 
 // Scalar reference quantizers, written against the bit layouts rather than
@@ -47,6 +48,12 @@ constexpr bool rounds_up(std::uint32_t kept, std::uint32_t remainder, int droppe
 void require_same_size(std::size_t a, std::size_t b) {
   if (a != b) {
     throw Error(ErrorCode::InvalidArgument, "input and output spans must have the same length");
+  }
+}
+
+void require_known(QuantFormat format) {
+  if (format != QuantFormat::Float16 && format != QuantFormat::BFloat16) {
+    throw Error(ErrorCode::InvalidArgument, "unknown quantization format");
   }
 }
 
@@ -151,55 +158,26 @@ float bfloat16_bits_to_float32(std::uint16_t bits) noexcept {
   return std::bit_cast<float>(std::uint32_t{bits} << 16);
 }
 
-void quantize(std::span<const float> in, std::span<std::uint16_t> out, QuantFormat format) {
+void quantize(std::span<const float> in, std::span<std::uint16_t> out, QuantFormat format, Backend backend) {
   require_same_size(in.size(), out.size());
-  switch (format) {
-    case QuantFormat::Float16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = float32_to_float16_bits(in[i]);
-      }
-      return;
-    case QuantFormat::BFloat16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = float32_to_bfloat16_bits(in[i]);
-      }
-      return;
-  }
-  throw Error(ErrorCode::InvalidArgument, "unknown quantization format");
+  require_known(format);
+  detail::quantize(detail::select_kernels(backend), in, out, format);
 }
 
-void dequantize(std::span<const std::uint16_t> in, std::span<float> out, QuantFormat format) {
+void dequantize(std::span<const std::uint16_t> in, std::span<float> out, QuantFormat format, Backend backend) {
   require_same_size(in.size(), out.size());
-  switch (format) {
-    case QuantFormat::Float16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = float16_bits_to_float32(in[i]);
-      }
-      return;
-    case QuantFormat::BFloat16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = bfloat16_bits_to_float32(in[i]);
-      }
-      return;
-  }
-  throw Error(ErrorCode::InvalidArgument, "unknown quantization format");
+  require_known(format);
+  detail::dequantize(detail::select_kernels(backend), in, out, format);
 }
 
-std::vector<float> quantize_round_trip(std::span<const float> in, QuantFormat format) {
+std::vector<float> quantize_round_trip(std::span<const float> in, QuantFormat format, Backend backend) {
+  require_known(format);
+  const detail::KernelTable& kernels = detail::select_kernels(backend);
+  std::vector<std::uint16_t> packed(in.size());
   std::vector<float> out(in.size());
-  switch (format) {
-    case QuantFormat::Float16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = float16_bits_to_float32(float32_to_float16_bits(in[i]));
-      }
-      return out;
-    case QuantFormat::BFloat16:
-      for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = bfloat16_bits_to_float32(float32_to_bfloat16_bits(in[i]));
-      }
-      return out;
-  }
-  throw Error(ErrorCode::InvalidArgument, "unknown quantization format");
+  detail::quantize(kernels, in, packed, format);
+  detail::dequantize(kernels, packed, out, format);
+  return out;
 }
 
 }  // namespace turbocore

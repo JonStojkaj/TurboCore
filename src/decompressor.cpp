@@ -6,9 +6,14 @@
 #include "detail/block_pipeline.hpp"
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
+#include "detail/kernels.hpp"
 #include "turbocore/error.hpp"
 
 namespace turbocore {
+
+Decompressor::Decompressor(Backend backend) : backend_(backend) {
+  (void)detail::select_kernels(backend);  // throws if the backend cannot run here
+}
 
 StreamInfo Decompressor::inspect(std::span<const std::uint8_t> stream) { return detail::parse_header(stream); }
 
@@ -21,10 +26,11 @@ std::vector<float> Decompressor::decompress(std::span<const std::uint8_t> stream
 
   std::vector<float> out(element_count);
   const DeflateCodec codec;
+  const KernelTable& kernels = select_kernels(backend_);
 
   // `store` turns a block's decoded elements back into output floats.
   const auto decode_blocks = [&]<typename Word>(std::vector<Word>& words, auto&& store) {
-    BlockDecoder<Word> decoder(info.predictor, info.byte_shuffle, codec);
+    BlockDecoder<Word> decoder(kernels, info.predictor, info.byte_shuffle, codec);
     std::size_t offset = kHeaderSize + std::size_t{info.block_count} * kIndexEntrySize;
     for (std::size_t block = 0; block < info.block_count; ++block) {
       const IndexEntry entry = parse_index_entry(stream.data() + kHeaderSize + block * kIndexEntrySize);
@@ -47,7 +53,7 @@ std::vector<float> Decompressor::decompress(std::span<const std::uint8_t> stream
   if (info.quantization.has_value()) {
     std::vector<std::uint16_t> words;
     decode_blocks(words, [&](std::span<const std::uint16_t> stored, std::span<float> chunk) {
-      dequantize(stored, chunk, *info.quantization);
+      dequantize(kernels, stored, chunk, *info.quantization);
     });
   } else {
     std::vector<std::uint32_t> words;

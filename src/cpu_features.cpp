@@ -59,10 +59,11 @@ bool cpu_supports_avx2_backend() noexcept {
   }
 
   const CpuidRegs leaf1 = cpuid(1, 0);
+  const bool sse42 = bit(leaf1.ecx, 20);  // CRC32 instruction
   const bool osxsave = bit(leaf1.ecx, 27);
   const bool avx = bit(leaf1.ecx, 28);
   const bool f16c = bit(leaf1.ecx, 29);
-  if (!osxsave || !avx || !f16c) {
+  if (!sse42 || !osxsave || !avx || !f16c) {
     return false;
   }
   // XCR0 bits 1 and 2: the OS saves and restores XMM and YMM state.
