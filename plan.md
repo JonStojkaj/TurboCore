@@ -7,8 +7,9 @@ Python bindings. No external compression library is used anywhere in the
 library itself.
 
 Status: **Phase 0 complete. Phase 1 core implemented** (lossless 1D FP32 codec,
-single-threaded); the remaining Phase 1 items are listed in that section.
-Phases 2–5 are not started.
+single-threaded). **Phase 2 math implemented** (quantizers and error metrics,
+exhaustively verified); wiring quantized data into the container is open.
+Phases 3–5 are not started.
 
 ---
 
@@ -266,10 +267,26 @@ Exit criteria for the rest of Phase 1:
 
 ---
 
-## Phase 2 — Quantization and floating-point error analysis
+## Phase 2 — Quantization and floating-point error analysis (math implemented)
 
 Done before SIMD on purpose: the scalar quantizers defined here are the
 bit-exact reference that the AVX2 (F16C) and CUDA versions must reproduce.
+
+Status:
+
+- [x] FP32 ↔ FP16 and FP32 ↔ BFloat16 scalar quantizers (`quantization.hpp`).
+- [x] Error metrics: `analyze_error`, `analyze_quantization`, `target_ulp`,
+      `ulp_distance` (`error_analysis.hpp`).
+- [x] Exhaustive verification over all 2³² inputs against a value-based
+      rounding model, and bit-for-bit against the CPU's own conversion on
+      AArch64 (`exhaustive` CTest label, enabled in the `release` preset,
+      about 16 s on 8+ cores).
+- [ ] **Container integration.** Storing FP16/BF16 elements needs a new
+      element type, a 2-byte shuffle and a format version bump. Until then
+      quantization is a standalone step and cannot be selected through
+      `Compressor`.
+- [ ] NumPy `float16` cross-check (moves to Phase 5 with the Python API).
+- [ ] Written error report per benchmark dataset (needs real datasets).
 
 ### 2.1 Quantizers
 
@@ -318,13 +335,15 @@ exact.
 ### 2.3 Tests
 
 - **Exhaustive:** all 2³² FP32 bit patterns through both quantizers, compared
-  against an independent slow reference (integer arithmetic on widened
-  values). Registered under a separate CTest label (`exhaustive`) so it runs
-  on demand and in CI, not on every local build.
+  against an independent reference that rounds the *value* in double
+  precision from the format definition (the library works on bit fields), and
+  on AArch64 against the CPU's FCVT instruction. Built only with
+  `TURBOCORE_BUILD_EXHAUSTIVE_TESTS=ON` (the `release` preset), under the
+  CTest label `exhaustive`.
 - Targeted cases: exact ties, the 65504/65520 overflow boundary, the FP16
   subnormal boundary, largest finite BF16 rounding, every NaN class.
-- Metric tests against hand-computed values and against NumPy
-  (`np.float16`) as an independent oracle.
+- Metric tests against hand-computed values. A NumPy (`np.float16`)
+  cross-check follows with the Python API in Phase 5.
 
 Exit criteria:
 

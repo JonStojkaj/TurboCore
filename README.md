@@ -4,11 +4,16 @@ A standalone C++20 library for high-performance compression of 32-bit
 floating-point data and HDR images, with scalar, AVX2 and CUDA backends, a
 floating-point error-analysis module and Python bindings.
 
-**Status:** the scalar reference codec works: lossless FP32 compression
-(delta/XOR predictor, byte shuffle, DEFLATE) with a checksummed block
-container. It is single-threaded and not yet fast. The AVX2 and CUDA backends,
-the quantization/error-analysis module and the Python compression API are not
-implemented. See [plan.md](plan.md) for the architecture and roadmap.
+**Status:** the scalar reference implementation works:
+
+- lossless FP32 compression (delta/XOR predictor, byte shuffle, DEFLATE) in a
+  checksummed block container; single-threaded and not yet fast;
+- correctly rounded FP32 → FP16 / BFloat16 quantization with an error-analysis
+  module (ULP error, MSE, PSNR, NaN/Inf accounting). Quantized data cannot yet
+  be stored in the container.
+
+The AVX2 and CUDA backends and the Python compression API are not implemented.
+See [plan.md](plan.md) for the architecture and roadmap.
 
 ## Usage
 
@@ -19,6 +24,12 @@ std::vector<float> data = /* ... */;
 std::vector<std::uint8_t> stream = turbocore::Compressor().compress(data);
 std::vector<float> restored = turbocore::Decompressor().decompress(stream);
 // restored is bit-identical to data, including NaN payloads and signed zeros.
+
+// How much would storing this data as 16-bit floats cost?
+turbocore::QuantizationReport report =
+    turbocore::analyze_quantization(data, turbocore::QuantFormat::Float16);
+// report.error.psnr_db, report.error.mean_squared_error,
+// report.max_target_ulp_error (at most 0.5), report.error.overflow_to_infinity_count, ...
 ```
 
 ## Building

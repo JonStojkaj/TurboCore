@@ -17,6 +17,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Options
 # ---------------------------------------------------------------------------
 option(TURBOCORE_BUILD_TESTS       "Build the GoogleTest unit tests"            ${PROJECT_IS_TOP_LEVEL})
+option(TURBOCORE_BUILD_EXHAUSTIVE_TESTS "Build tests that sweep all 2^32 FP32 bit patterns (slow)" OFF)
 option(TURBOCORE_BUILD_BENCHMARKS  "Build the Google Benchmark throughput suite" OFF)
 option(TURBOCORE_BUILD_PYTHON      "Build the pybind11 Python extension"         OFF)
 option(TURBOCORE_INSTALL           "Generate install and package-config rules"   ${PROJECT_IS_TOP_LEVEL})

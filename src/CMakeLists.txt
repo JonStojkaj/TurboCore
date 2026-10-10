@@ -26,7 +26,9 @@ target_sources(turbocore
     decompressor.cpp
     deflate_decoder.cpp
     deflate_encoder.cpp
+    error_analysis.cpp
     huffman.cpp
+    quantization.cpp
     transforms.cpp
   PUBLIC
     FILE_SET HEADERS
@@ -38,6 +40,8 @@ target_sources(turbocore
       "${PROJECT_SOURCE_DIR}/include/turbocore/compressor.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/decompressor.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/error.hpp"
+      "${PROJECT_SOURCE_DIR}/include/turbocore/error_analysis.hpp"
+      "${PROJECT_SOURCE_DIR}/include/turbocore/quantization.hpp"
       "${PROJECT_SOURCE_DIR}/include/turbocore/turbocore.hpp"
       "${_turbocore_generated_include}/turbocore/config.hpp"
       "${_turbocore_generated_include}/turbocore/export.hpp"

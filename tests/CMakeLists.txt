@@ -6,6 +6,8 @@ add_executable(turbocore_tests
   test_build_info.cpp
   test_roundtrip.cpp
   test_corruption.cpp
+  test_error_analysis.cpp
+  test_quantization.cpp
 )
 target_link_libraries(turbocore_tests PRIVATE TurboCore::turbocore GTest::gtest_main)
 turbocore_configure_target(turbocore_tests)
@@ -55,4 +57,21 @@ if(NOT BUILD_SHARED_LIBS)
   else()
     message(STATUS "TurboCore: zlib interop test disabled (needs a Python 3 interpreter on a POSIX host)")
   endif()
+endif()
+
+# --- Exhaustive tests: every one of the 2^32 FP32 bit patterns. -------------
+# Minutes in an optimised build and impractical under sanitizers, so they are
+# opt-in and carry their own label.
+if(TURBOCORE_BUILD_EXHAUSTIVE_TESTS)
+  find_package(Threads REQUIRED)
+  add_executable(turbocore_exhaustive_tests
+    exhaustive/test_quantization_exhaustive.cpp
+  )
+  target_link_libraries(turbocore_exhaustive_tests PRIVATE TurboCore::turbocore GTest::gtest_main Threads::Threads)
+  target_include_directories(turbocore_exhaustive_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  turbocore_configure_target(turbocore_exhaustive_tests)
+  gtest_discover_tests(turbocore_exhaustive_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS exhaustive TIMEOUT 3600
+  )
 endif()

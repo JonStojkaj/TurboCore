@@ -28,6 +28,7 @@
         "CMAKE_BUILD_TYPE": "Release",
         "TURBOCORE_WARNINGS_AS_ERRORS": "ON",
         "TURBOCORE_BUILD_BENCHMARKS": "ON",
+        "TURBOCORE_BUILD_EXHAUSTIVE_TESTS": "ON",
         "TURBOCORE_BUILD_PYTHON": "ON"
       }
     },

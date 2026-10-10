@@ -8,5 +8,7 @@
 #include "turbocore/config.hpp"
 #include "turbocore/decompressor.hpp"
 #include "turbocore/error.hpp"
+#include "turbocore/error_analysis.hpp"
+#include "turbocore/quantization.hpp"
 
 #endif  // TURBOCORE_TURBOCORE_HPP
