@@ -33,4 +33,23 @@ if(TURBOCORE_BUILD_TESTS)
     ENVIRONMENT "PYTHONPATH=${PROJECT_BINARY_DIR}/python"
     LABELS python
   )
+
+  # The API tests need NumPy at run time (the extension itself only needs its
+  # headers' ABI, which pybind11 provides).
+  execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import numpy"
+    RESULT_VARIABLE _turbocore_numpy_missing
+    OUTPUT_QUIET ERROR_QUIET
+  )
+  if(_turbocore_numpy_missing)
+    message(WARNING "TurboCore: NumPy not found for ${Python_EXECUTABLE}; the Python API tests are disabled")
+  else()
+    add_test(NAME python.api
+      COMMAND ${Python_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_api.py"
+    )
+    set_tests_properties(python.api PROPERTIES
+      ENVIRONMENT "PYTHONPATH=${PROJECT_BINARY_DIR}/python"
+      LABELS python
+    )
+  endif()
 endif()

@@ -37,12 +37,11 @@ class BlockPacker {
   explicit BlockPacker(const Codec& codec) noexcept : codec_(codec) {}
 
   /// Replaces the contents of `payload` with the block's payload and returns
-  /// its index entry. `plane_bytes` is the size of one byte plane if
-  /// `transformed` is shuffled, 0 otherwise.
-  IndexEntry pack(std::span<const std::uint8_t> transformed, std::uint32_t crc, std::size_t plane_bytes,
+  /// its index entry.
+  IndexEntry pack(std::span<const std::uint8_t> transformed, std::uint32_t crc, const CodecHints& hints,
                   std::vector<std::uint8_t>& payload) const {
     payload.clear();
-    codec_.compress(transformed, payload, plane_bytes);
+    codec_.compress(transformed, payload, hints);
 
     // Incompressible blocks are stored verbatim so the stream never grows by
     // more than the header and index.
@@ -116,7 +115,9 @@ class BlockEncoder {
     } else {
       std::memcpy(transformed_.data(), words.data(), byte_count);
     }
-    return packer_.pack(transformed_, crc, byte_shuffle_ ? words.size() : 0, payload);
+    // With the byte shuffle on, each plane of words.size() bytes has its own
+    // statistics; tell the codec where the planes are.
+    return packer_.pack(transformed_, crc, CodecHints{.segment_bytes = byte_shuffle_ ? words.size() : 0}, payload);
   }
 
  private:

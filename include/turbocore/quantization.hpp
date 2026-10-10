@@ -52,7 +52,8 @@ enum class QuantFormat : std::uint8_t {
 [[nodiscard]] TURBOCORE_EXPORT float bfloat16_bits_to_float32(std::uint16_t bits) noexcept;
 
 // The array functions below produce, element for element, exactly what the
-// scalar functions above produce, on every backend.
+// scalar functions above produce, on every backend. Backend::Cuda applies to
+// Compressor and Decompressor only; here it selects the best CPU backend.
 
 /// Element-wise FP32 -> `format`.
 /// Throws Error(InvalidArgument) if the spans differ in length, or

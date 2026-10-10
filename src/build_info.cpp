@@ -7,7 +7,7 @@
 #include "detail/kernels.hpp"
 
 #if TURBOCORE_HAS_CUDA
-#include "backends/cuda/probe_cuda.hpp"
+#include "backends/cuda/transform_stage.hpp"
 #endif
 
 // Platform assumptions the bit-level float code relies on. Failing here is

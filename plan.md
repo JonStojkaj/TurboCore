@@ -6,12 +6,16 @@ CUDA), a floating-point error-analysis module for lossy quantization, and
 Python bindings. No external compression library is used anywhere in the
 library itself.
 
-Status: **Phase 0 complete. Phase 1 core implemented** (lossless 1D FP32 codec,
-single-threaded). **Phase 2 implemented** (quantizers, error metrics, lossy mode in the
-container; exhaustively verified). **Phase 3 started**: AVX2 transform,
-quantization and CRC kernels are implemented and verified bit-identical under
-Rosetta 2, with no native x86 performance numbers yet. Phases 4–5 are not
-started.
+Status:
+
+| Phase | State |
+|-------|-------|
+| 0 Build system | done |
+| 1 Scalar codec | done except 2D predictor, PFM image I/O, fuzz target, lazy matching |
+| 2 Quantization and error analysis | done, exhaustively verified |
+| 3 CPU acceleration | AVX2 kernels, block threading and LZ77 skipping done; **no native x86 timings yet** |
+| 4 CUDA | transform stage written behind CMake guards; **never compiled by nvcc or run on a GPU, and not built or tested locally**; entropy coding still on CPU |
+| 5 Python API | compress / decompress / analysis API done and tested; packaging (`pip install`) and CI not done |
 
 ---
 
@@ -162,7 +166,7 @@ python/                   pybind11 extension + Python package
 | macOS arm64 (development machine) | scalar backend, Python module, sanitizers | working |
 | macOS x86_64 under Rosetta 2 (`x86-rosetta` preset) | AVX2 backend **correctness** | working; needs `ROSETTA_ADVERTISE_AVX=1`, which the test preset sets |
 | Linux x86_64 cloud instance, native | AVX2 backend **performance** | to be provisioned for the final benchmarks |
-| Linux GPU VM (AWS / RunPod) or GitHub Actions | CUDA backend, build and run | to be provisioned; until then CUDA code is written locally and cannot be compiled |
+| Linux GPU VM (AWS / RunPod) or GitHub Actions | CUDA backend, build and run | to be provisioned; until then the CUDA code is not compiled anywhere |
 
 Rosetta numbers are not performance evidence. Every AVX2 throughput figure in
 the final report must come from native x86 hardware.
@@ -465,14 +469,65 @@ Exit criteria:
 
 ---
 
-## Phase 4 — CUDA backend
+## Phase 4 — CUDA backend (transform stage written, not yet run on a GPU)
 
-**Environment:** a Linux GPU VM (AWS / RunPod) or GitHub Actions. CUDA code is
-written on the arm64 development machine, where it cannot be compiled, so it
-is reviewed statically and kept behind the existing build-time gate until
-deployment. The first step on the GPU machine is validating the untested
-Phase 0 CUDA build path; until that has happened, no CUDA code counts as
-working.
+**What exists**
+
+- `Backend::Cuda`: the transform stage (quantization, predictor, byte
+  shuffle, and their inverses) runs on the device for the whole array in one
+  round trip; DEFLATE runs per block on CPU threads. This is the hybrid mode
+  of step 8 below, reached first because its contract is simple: every
+  buffer must equal what the CPU backends compute.
+- `src/backends/cuda/transform_stage.cu`:
+  - forward: one fused element-wise kernel (stored word, predictor residual,
+    shuffled bytes), plus a per-plane byte histogram accumulated in **shared
+    memory** and handed to the CPU entropy stage, which then skips its own
+    counting pass;
+  - inverse: the predictor's inverse is a prefix scan, done as three kernels:
+    tile-local scans in shared memory (Hillis–Steele), a shared-memory scan of
+    the tile totals per block, and an offset pass;
+  - FP16/BFloat16 conversion as integer arithmetic on bit patterns, so it
+    cannot differ from the scalar reference through floating-point modes;
+  - page-locked host buffers and asynchronous copies on one stream, in chunks
+    of whole blocks so device memory is bounded.
+- The stream is byte-identical to the CPU backends by contract.
+- CMake compiles none of this unless the toolkit is found
+  (`TURBOCORE_ENABLE_CUDA`); the default build on this machine is unaffected.
+
+**Verification status**
+
+None of the CUDA code is compiled or executed on the development machine: the
+`.cu` file and the host code paths for `Backend::Cuda` are behind
+`TURBOCORE_HAS_CUDA` and only exist in a build with the toolkit. Until that
+build happens on the cloud GPU machine, the following are all unverified:
+that nvcc accepts the source, that the host integration compiles, that the
+kernels are correct, and how fast any of it is.
+
+First steps on the GPU machine: `cmake --preset cuda`, build, `ctest --preset
+cuda`. The `CudaParity` tests compare real-GPU streams with the scalar
+backend byte for byte and are the acceptance test for this phase.
+
+**Expected performance, stated before measuring.** The CPU does these
+transforms at 12–65 GiB/s; a PCIe round trip moves roughly 10–25 GB/s each
+way. Moving only the transform stage to the GPU therefore cannot beat the CPU
+end to end, and `Backend::Auto` never selects CUDA. The GPU pays off only
+when entropy coding moves to the device too. The pieces already here are the
+foundation for that: per-plane histograms on the device are the input to
+Huffman table construction, and the plane-per-DEFLATE-block layout from
+Phase 3 makes every plane an independent encoding task.
+
+**Still open**
+
+1. Compile and run on real hardware; fix whatever nvcc or the device objects to.
+2. Huffman encoding on the device (code lengths lookup → prefix sum of bit
+   lengths → parallel bit scatter), then decoding with per-block entry points.
+3. LZ77 on the device, or stay hybrid for planes that need it (most do not,
+   per the Phase 3 skip heuristic).
+4. Overlapped transfers across two or more streams; measure pageable vs
+   pinned vs overlapped.
+5. `compute-sanitizer`, and the size at which the GPU overtakes the CPU.
+
+The original, fuller design for this phase follows.
 
 Realistic scope: full GPU DEFLATE at nvCOMP's level is a research-grade
 problem. The phase is staged so that each stage is independently useful and
@@ -527,7 +582,23 @@ Exit criteria:
 
 ---
 
-## Phase 5 — Python API, benchmarks and release
+## Phase 5 — Python API, benchmarks and release (API done)
+
+Status:
+
+- [x] **Python API** (`python/`): `compress`, `decompress`, `inspect`,
+      `quantize_round_trip`, `analyze_error`, `analyze_quantization`,
+      `build_info`, `runtime_support`, `is_backend_available`. float32 only
+      (other dtypes are rejected, not narrowed), any shape or memory layout,
+      any bytes-like input, GIL released around native calls, `ValueError` /
+      `TypeError` / `TurboCoreError` mapping.
+- [x] **NumPy cross-checks** (from Phase 2): FP16 conversion equals
+      `astype(np.float16)` bit for bit on 400 000 values across the format's
+      range; BFloat16 equals an integer-arithmetic model; MSE and PSNR equal
+      an exactly rounded NumPy computation.
+- [ ] Packaging (`pyproject.toml`, `pip install .`), type stubs, pytest.
+- [ ] Shape is not stored in the stream; `decompress` returns a 1-D array.
+- [ ] CI, real datasets, results table, format specification document.
 
 Steps:
 

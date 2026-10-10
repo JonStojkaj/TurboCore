@@ -476,12 +476,21 @@ struct SegmentPlan {
 
 /// Costs one segment as literals and estimates what LZ77 would make of it by
 /// running the match search on a probe at its start, with no history.
+///
+/// `known_histogram`, if not null, is the segment's 256 byte counts, computed
+/// elsewhere; it must equal what literal_histogram() would count.
 SegmentPlan plan_segment(std::span<const std::uint8_t> in, std::size_t begin, std::size_t end, Matcher& probe_matcher,
-                         TokenStream& probe) {
+                         TokenStream& probe, const std::uint32_t* known_histogram) {
   SegmentPlan plan;
   plan.begin = begin;
   plan.end = end;
-  const auto literal_frequency = literal_histogram(in.subspan(begin, end - begin));
+  std::array<std::uint32_t, kLitLenSymbols> literal_frequency{};
+  if (known_histogram != nullptr) {
+    std::copy(known_histogram, known_histogram + 256, literal_frequency.begin());
+    ++literal_frequency[kEndOfBlock];
+  } else {
+    literal_frequency = literal_histogram(in.subspan(begin, end - begin));
+  }
   plan.literal = plan_dynamic(literal_frequency, kNoDistances, 0);
   plan.literal_fixed_bits = fixed_block_bits(literal_frequency, kNoDistances, 0);
 
@@ -563,7 +572,7 @@ DeflateCodec::DeflateCodec(int level) noexcept
       adaptive_search_(level < kMaxLevel) {}
 
 void DeflateCodec::compress(std::span<const std::uint8_t> in, std::vector<std::uint8_t>& out,
-                            std::size_t segment_hint) const {
+                            const CodecHints& hints) const {
   out.reserve(out.size() + in.size() / 2 + 64);
   BitWriter writer(out);
 
@@ -577,10 +586,15 @@ void DeflateCodec::compress(std::span<const std::uint8_t> in, std::vector<std::u
 
   // Segment boundaries follow the hint; short planes are grouped so that no
   // segment is smaller than kMinSegmentBytes.
-  std::size_t segment = segment_hint != 0 ? segment_hint : kDefaultSegmentBytes;
+  std::size_t segment = hints.segment_bytes != 0 ? hints.segment_bytes : kDefaultSegmentBytes;
   if (segment < kMinSegmentBytes) {
     segment *= (kMinSegmentBytes + segment - 1) / segment;
   }
+  const std::size_t segment_count = (in.size() + segment - 1) / segment;
+  // Precomputed histograms are per hinted segment, so they apply only if the
+  // hinted segments were not regrouped and all of them are covered.
+  const bool histograms_usable =
+      segment == hints.segment_bytes && hints.segment_histograms.size() == segment_count * 256;
 
   Matcher matcher(in, max_chain_);
   TokenStream tokens;
@@ -588,9 +602,11 @@ void DeflateCodec::compress(std::span<const std::uint8_t> in, std::vector<std::u
   // Pass 1: cost every segment as literals and probe it with the match
   // search, then decide which segments are worth searching in full.
   std::vector<SegmentPlan> plans;
-  plans.reserve(in.size() / segment + 1);
+  plans.reserve(segment_count);
   for (std::size_t begin = 0; begin < in.size(); begin += segment) {
-    plans.push_back(plan_segment(in, begin, std::min(in.size(), begin + segment), matcher, tokens));
+    const std::uint32_t* known_histogram =
+        histograms_usable ? hints.segment_histograms.data() + plans.size() * 256 : nullptr;
+    plans.push_back(plan_segment(in, begin, std::min(in.size(), begin + segment), matcher, tokens, known_histogram));
   }
   if (adaptive_search_) {
     std::uint64_t stream_estimate_bits = 0;

@@ -31,4 +31,16 @@ inline bool avx2_required() {
     }                                                                                      \
   } while (false)
 
+/// Same for the CUDA backend (TURBOCORE_REQUIRE_CUDA=1).
+#define TURBOCORE_NEEDS_CUDA()                                                             \
+  do {                                                                                     \
+    if (!::turbocore::is_backend_available(::turbocore::Backend::Cuda)) {                  \
+      const char* turbocore_required_ = std::getenv("TURBOCORE_REQUIRE_CUDA");             \
+      if (turbocore_required_ != nullptr && std::string_view(turbocore_required_) == "1") { \
+        FAIL() << "TURBOCORE_REQUIRE_CUDA=1 but the CUDA backend is not available";        \
+      }                                                                                    \
+      GTEST_SKIP() << "CUDA backend not available on this machine";                        \
+    }                                                                                      \
+  } while (false)
+
 #endif  // TURBOCORE_TESTS_BACKEND_SUPPORT_HPP

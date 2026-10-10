@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::uint8_t> output;
   if (mode == "deflate") {
-    turbocore::detail::DeflateCodec(static_cast<int>(argument)).compress(input, output, segment_hint);
+    turbocore::detail::DeflateCodec(static_cast<int>(argument)).compress(input, output, turbocore::detail::CodecHints{.segment_bytes = segment_hint});
   } else if (mode == "inflate") {
     output.resize(static_cast<std::size_t>(argument));
     if (!turbocore::detail::DeflateCodec().decompress(input, output)) {

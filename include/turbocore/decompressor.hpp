@@ -24,6 +24,8 @@ struct StreamInfo {
 
 struct DecompressionOptions {
   /// Implementation to run. Any backend decodes streams written by any other.
+  /// With Backend::Cuda, streams whose blocks exceed what the device code
+  /// handles (524288 elements) are decoded on the CPU instead.
   Backend backend = Backend::Auto;
 
   /// Worker threads; blocks are decoded independently, one per thread.

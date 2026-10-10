@@ -8,6 +8,20 @@
 
 namespace turbocore::detail {
 
+/// What the caller knows about the structure of a buffer handed to a codec.
+struct CodecHints {
+  /// The input consists of consecutive regions of this many bytes with
+  /// different statistics (the byte planes of a shuffled block), which the
+  /// codec can model separately. 0 means unknown.
+  std::size_t segment_bytes = 0;
+
+  /// Optional precomputed byte histograms, 256 counts per segment, for the
+  /// segments of `segment_bytes` bytes in order (the GPU transform stage
+  /// produces these as a by-product). Used only if it covers every segment
+  /// exactly; otherwise the codec counts for itself.
+  std::span<const std::uint32_t> segment_histograms;
+};
+
 /// A lossless byte-level entropy stage. Implementations are stateless across
 /// calls, so one instance can serve many blocks (and, later, many threads).
 class Codec {
@@ -17,16 +31,14 @@ class Codec {
   Codec& operator=(const Codec&) = delete;
   virtual ~Codec() = default;
 
-  /// Appends the compressed form of `in` to `out`.
-  ///
-  /// `segment_hint` tells the codec that `in` is made of consecutive regions
-  /// of that many bytes with different statistics (the byte planes of a
-  /// shuffled block), so it can model each one separately. 0 means unknown.
-  /// The hint affects only the size and speed of the result, never validity.
+  /// Appends the compressed form of `in` to `out`. The hints affect only the
+  /// size and speed of the result, never its validity.
   virtual void compress(std::span<const std::uint8_t> in, std::vector<std::uint8_t>& out,
-                        std::size_t segment_hint) const = 0;
+                        const CodecHints& hints) const = 0;
 
-  void compress(std::span<const std::uint8_t> in, std::vector<std::uint8_t>& out) const { compress(in, out, 0); }
+  void compress(std::span<const std::uint8_t> in, std::vector<std::uint8_t>& out) const {
+    compress(in, out, CodecHints{});
+  }
 
   /// Decodes `in`, which must expand to exactly out.size() bytes and be
   /// consumed completely. Returns false on any malformed input; never reads
@@ -64,7 +76,7 @@ class DeflateCodec final : public Codec {
 
   /// Requires in.size() < 2^31.
   void compress(std::span<const std::uint8_t> in, std::vector<std::uint8_t>& out,
-                std::size_t segment_hint) const override;
+                const CodecHints& hints) const override;
 
   [[nodiscard]] bool decompress(std::span<const std::uint8_t> in,
                                 std::span<std::uint8_t> out) const noexcept override;

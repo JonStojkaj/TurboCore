@@ -8,6 +8,10 @@
 #include "turbocore/config.hpp"
 #include "turbocore/error.hpp"
 
+#if TURBOCORE_HAS_CUDA
+#include "backends/cuda/transform_stage.hpp"
+#endif
+
 #if TURBOCORE_HAS_AVX2
 #include "backends/avx2/kernels_avx2.hpp"
 #include "backends/avx2/probe_avx2.hpp"
@@ -105,8 +109,26 @@ const KernelTable* avx2_kernels() noexcept {
 #endif
 }
 
+bool cuda_available() noexcept {
+#if TURBOCORE_HAS_CUDA
+  static const bool available = cuda::device_count() > 0;
+  return available;
+#else
+  return false;
+#endif
+}
+
 const KernelTable& select_kernels(Backend backend) {
   switch (backend) {
+    case Backend::Cuda:
+      if (!cuda_available()) {
+        throw Error(ErrorCode::BackendUnavailable,
+                    TURBOCORE_HAS_CUDA ? "the CUDA backend found no usable GPU"
+                                       : "this build of TurboCore does not include the CUDA backend");
+      }
+      // The GPU runs the transform stage; checksums and anything else left
+      // on the host use the best CPU kernels.
+      return select_kernels(Backend::Auto);
     case Backend::Auto: {
       const KernelTable* avx2 = avx2_kernels();
       return avx2 != nullptr ? *avx2 : scalar_kernels();
@@ -135,6 +157,8 @@ bool is_backend_available(Backend backend) noexcept {
       return true;
     case Backend::Avx2:
       return detail::avx2_kernels() != nullptr;
+    case Backend::Cuda:
+      return detail::cuda_available();
   }
   return false;
 }
@@ -151,6 +175,8 @@ const char* backend_name(Backend backend) noexcept {
       return "scalar";
     case Backend::Avx2:
       return "avx2";
+    case Backend::Cuda:
+      return "cuda";
   }
   return "unknown";
 }

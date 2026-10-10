@@ -4,20 +4,26 @@ A standalone C++20 library for high-performance compression of 32-bit
 floating-point data and HDR images, with scalar, AVX2 and CUDA backends, a
 floating-point error-analysis module and Python bindings.
 
-**Status:** the scalar reference implementation works:
+**Status**
 
-- lossless FP32 compression (delta/XOR predictor, byte shuffle, DEFLATE) in a
-  checksummed block container, multi-threaded over blocks;
-- correctly rounded FP32 → FP16 / BFloat16 quantization with an error-analysis
+- Lossless FP32 compression (delta/XOR predictor, byte shuffle, DEFLATE) in a
+  checksummed block container, multi-threaded over blocks. The DEFLATE
+  streams are standard RFC 1951 and cross-checked against zlib.
+- Correctly rounded FP32 → FP16 / BFloat16 quantization with an error-analysis
   module (ULP error, MSE, PSNR, NaN/Inf accounting), selectable as a lossy
-  mode of the compressor.
+  mode of the compressor. Verified on all 2^32 inputs.
+- AVX2 backend for the transforms, quantization and CRC, bit-identical to the
+  scalar code. Verified under Rosetta 2 only; **not yet benchmarked on native
+  x86**.
+- CUDA backend for the transform stage, behind CMake guards. **Written without
+  access to a GPU: never compiled by nvcc or run on a device, and not built
+  or tested by the local build.** It is to be compiled and validated on a
+  cloud GPU machine.
+- Python API (NumPy) for compression and error analysis.
 
-An AVX2 backend covers the predictors, byte shuffle, quantization and CRC. It
-is verified bit-identical to the scalar code (under Rosetta 2) but has not been
-benchmarked on native x86 yet, and the DEFLATE stage, which dominates run
-time, is still scalar. The CUDA backend and the Python compression API are not
-implemented.
-See [plan.md](plan.md) for the architecture and roadmap.
+All performance figures so far come from one Apple Silicon development
+machine and synthetic data. See [plan.md](plan.md) for numbers, architecture
+and what is still open.
 
 ## Usage
 
@@ -57,7 +63,7 @@ ctest --preset dev
 | `dev`         | Debug with sanitizers |
 | `release`     | Release, benchmarks and the Python module |
 | `x86-rosetta` | x86_64 build on Apple Silicon to exercise the AVX2 backend under Rosetta 2 (correctness only) |
-| `cuda`        | Release with the CUDA backend required |
+| `cuda`        | Release with the CUDA backend required (needs the CUDA Toolkit and a GPU) |
 
 ## Options
 
@@ -80,5 +86,20 @@ runtime by CPUID, so a binary built with it still runs on CPUs without AVX2.
 
 ```sh
 cmake --preset release && cmake --build --preset release
-PYTHONPATH=build/release/python python3 -c "import turbocore; print(turbocore.build_info())"
+export PYTHONPATH=build/release/python
 ```
+
+```python
+import numpy as np, turbocore
+
+x = np.fromfile("field.f32", dtype=np.float32)
+stream = turbocore.compress(x)                       # lossless, all cores
+assert np.array_equal(turbocore.decompress(stream), x)
+
+report = turbocore.analyze_quantization(x, "float16")
+print(report["error"]["psnr_db"], report["max_target_ulp_error"])
+small = turbocore.compress(x, quantization="float16")  # lossy
+```
+
+Only float32 arrays are accepted; `decompress` returns a 1-D array (the shape
+is not stored). There is no `pip install` packaging yet.

@@ -7,6 +7,7 @@
 #include "detail/block_pipeline.hpp"
 #include "detail/codec.hpp"
 #include "detail/container.hpp"
+#include "detail/gpu_stage.hpp"
 #include "detail/kernels.hpp"
 #include "detail/parallel.hpp"
 #include "turbocore/error.hpp"
@@ -53,6 +54,45 @@ std::vector<float> Decompressor::decompress(std::span<const std::uint8_t> stream
   std::vector<float> out(element_count);
   const DeflateCodec codec;
   const KernelTable& kernels = select_kernels(options_.backend);
+
+#if TURBOCORE_HAS_CUDA
+  // Backend::Cuda: entropy-decode every block on CPU threads into one
+  // buffer, run the inverse transform stage on the device for the whole
+  // array, then verify the block checksums. Streams whose blocks are larger
+  // than the device implementation supports are decoded on the CPU instead.
+  if (options_.backend == Backend::Cuda && block_elements <= cuda::kMaxBlockElements) {
+    const std::size_t width = element_size_of(info.quantization);
+    const bool quantized = info.quantization.has_value();
+
+    std::vector<std::uint8_t> transformed(element_count * width);
+    parallel_for(block_count, options_.threads, [&] {
+      return [&, unpacker = BlockUnpacker(codec)](std::size_t block) {
+        const BlockLocation& location = locations[block];
+        const std::size_t first = block * block_elements;
+        const std::size_t n = std::min(block_elements, element_count - first);
+        unpacker.unpack(stream.subspan(location.offset, location.entry.compressed_size), location.entry,
+                        std::span<std::uint8_t>(transformed).subspan(first * width, n * width));
+      };
+    });
+
+    std::vector<std::uint16_t> words(quantized ? element_count : 0);
+    require_ok(cuda::inverse(make_stage_config(info.quantization, info.predictor, info.byte_shuffle, block_elements),
+                             transformed.data(), element_count, quantized ? words.data() : nullptr, out.data()));
+
+    parallel_for(block_count, options_.threads, [&] {
+      return [&](std::size_t block) {
+        const std::size_t first = block * block_elements;
+        const std::size_t n = std::min(block_elements, element_count - first);
+        const auto* stored = quantized ? reinterpret_cast<const std::uint8_t*>(words.data() + first)
+                                       : reinterpret_cast<const std::uint8_t*>(out.data() + first);
+        if (kernels.crc32c(stored, n * width) != locations[block].entry.crc) {
+          throw Error(ErrorCode::ChecksumMismatch, "block checksum mismatch");
+        }
+      };
+    });
+    return out;
+  }
+#endif
 
   // Each block decodes into its own disjoint range of `out`.
   // `store` turns a block's decoded elements back into output floats.

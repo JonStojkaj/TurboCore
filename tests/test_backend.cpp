@@ -146,6 +146,96 @@ TEST(BackendParity, QuantizationIsBitIdentical) {
   }
 }
 
+// --- Backend::Cuda ----------------------------------------------------------
+// These need a CUDA build and a GPU; elsewhere they are skipped. They check
+// the backend's contract: byte-identical streams and bit-identical decoded
+// values compared with the scalar backend.
+
+TEST(CudaParity, CompressedStreamsAreByteIdentical) {
+  TURBOCORE_NEEDS_CUDA();
+  for (const Dataset& dataset : datasets()) {
+    for (CompressionOptions options : option_sets()) {
+      SCOPED_TRACE(dataset.name + " predictor=" + std::to_string(static_cast<int>(options.predictor)) +
+                   " shuffle=" + std::to_string(options.byte_shuffle) +
+                   " quantized=" + std::to_string(options.quantization.has_value()));
+      options.backend = Backend::Scalar;
+      const std::vector<std::uint8_t> scalar = Compressor(options).compress(dataset.values);
+      options.backend = Backend::Cuda;
+      ASSERT_EQ(Compressor(options).compress(dataset.values), scalar);
+    }
+  }
+}
+
+TEST(CudaParity, DecodesTheSameValues) {
+  TURBOCORE_NEEDS_CUDA();
+  for (const Dataset& dataset : datasets()) {
+    for (const CompressionOptions& options : option_sets()) {
+      SCOPED_TRACE(dataset.name);
+      const std::vector<std::uint8_t> stream = Compressor(options).compress(dataset.values);
+      const std::vector<float> scalar = Decompressor({.backend = Backend::Scalar}).decompress(stream);
+      ASSERT_TRUE(bit_identical(Decompressor({.backend = Backend::Cuda}).decompress(stream), scalar));
+    }
+  }
+}
+
+// Default-sized blocks: the two-level prefix scan and the histogram hand-off
+// only do real work once a block spans many scan tiles and a plane is large
+// enough to be its own DEFLATE segment.
+TEST(CudaParity, FullSizeBlocks) {
+  TURBOCORE_NEEDS_CUDA();
+  namespace t = turbocore::testing;
+  std::vector<float> data = t::smooth_wave(150000);
+  const std::vector<float> noise = t::random_bit_patterns(50001, 3);
+  data.insert(data.end(), noise.begin(), noise.end());
+
+  for (const std::optional<QuantFormat> quantization :
+       {std::optional<QuantFormat>{}, std::optional{QuantFormat::Float16}, std::optional{QuantFormat::BFloat16}}) {
+    for (const Predictor predictor : {Predictor::Delta, Predictor::Xor}) {
+      CompressionOptions options{.quantization = quantization, .predictor = predictor, .level = 1};
+      options.backend = Backend::Scalar;
+      const std::vector<std::uint8_t> scalar = Compressor(options).compress(data);
+      options.backend = Backend::Cuda;
+      ASSERT_EQ(Compressor(options).compress(data), scalar);
+      ASSERT_TRUE(bit_identical(Decompressor({.backend = Backend::Cuda}).decompress(scalar),
+                                Decompressor({.backend = Backend::Scalar}).decompress(scalar)));
+    }
+  }
+}
+
+TEST(CudaParity, DamagedStreamsAreRejected) {
+  TURBOCORE_NEEDS_CUDA();
+  const std::vector<float> data = turbocore::testing::smooth_wave(5000);
+  std::vector<std::uint8_t> stream = Compressor({.block_elements = 1000}).compress(data);
+  stream[32 + 2 * 12 + 4] ^= 0xFFu;  // CRC of block 2
+  try {
+    (void)Decompressor({.backend = Backend::Cuda}).decompress(stream);
+    ADD_FAILURE() << "expected turbocore::Error";
+  } catch (const turbocore::Error& error) {
+    EXPECT_EQ(error.code(), turbocore::ErrorCode::ChecksumMismatch);
+  }
+}
+
+TEST(CudaParity, BlockSizeLimit) {
+  TURBOCORE_NEEDS_CUDA();
+  const std::size_t too_large = (std::size_t{1} << 19) + 1;
+  EXPECT_THROW(Compressor({.block_elements = too_large, .backend = Backend::Cuda}), turbocore::Error);
+  // A stream written with larger blocks is still decodable when the GPU is
+  // requested: the decoder falls back to the CPU for it.
+  const std::vector<float> data = turbocore::testing::ramp(1000);
+  const auto stream = Compressor({.block_elements = too_large}).compress(data);
+  EXPECT_TRUE(bit_identical(Decompressor({.backend = Backend::Cuda}).decompress(stream), data));
+}
+
+TEST(Backend, CudaIsNeverChosenAutomatically) {
+  EXPECT_NE(turbocore::best_available_backend(), Backend::Cuda);
+  EXPECT_STREQ(turbocore::backend_name(Backend::Cuda), "cuda");
+  EXPECT_EQ(turbocore::is_backend_available(Backend::Cuda), turbocore::runtime_support().cuda_device_count > 0);
+  if (!turbocore::is_backend_available(Backend::Cuda)) {
+    EXPECT_THROW(Compressor({.backend = Backend::Cuda}), turbocore::Error);
+    EXPECT_THROW(Decompressor({.backend = Backend::Cuda}), turbocore::Error);
+  }
+}
+
 // The array API must equal the documented scalar functions on whatever
 // backend Auto picks, which is the path every other test exercises.
 TEST(BackendParity, AutoMatchesTheScalarDefinition) {

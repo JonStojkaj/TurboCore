@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <random>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +12,7 @@
 
 namespace {
 
+using turbocore::detail::CodecHints;
 using turbocore::detail::DeflateCodec;
 using Bytes = std::vector<std::uint8_t>;
 
@@ -106,7 +108,7 @@ TEST(Deflate, SegmentHintsNeverAffectCorrectness) {
       for (const std::size_t hint : {std::size_t{0}, plane, std::size_t{1}, std::size_t{7}, std::size_t{4096}, data.size(), data.size() * 2}) {
         SCOPED_TRACE("plane=" + std::to_string(plane) + " level=" + std::to_string(level) + " hint=" + std::to_string(hint));
         Bytes packed;
-        codec.compress(data, packed, hint);
+        codec.compress(data, packed, CodecHints{.segment_bytes = hint});
         Bytes unpacked(data.size());
         ASSERT_TRUE(codec.decompress(packed, unpacked));
         ASSERT_EQ(unpacked, data);
@@ -125,7 +127,7 @@ TEST(Deflate, PlanesAreModelledSeparately) {
   const DeflateCodec codec(6);
 
   Bytes with_hint;
-  codec.compress(data, with_hint, plane);
+  codec.compress(data, with_hint, CodecHints{.segment_bytes = plane});
   const double small_alphabet_bytes = static_cast<double>(plane) * 3.585 / 8.0;  // log2(12) bits per byte
   EXPECT_LT(static_cast<double>(with_hint.size()), 1.03 * (small_alphabet_bytes + static_cast<double>(plane)) + 3000.0);
 }
@@ -134,7 +136,7 @@ TEST(Deflate, IncompressibleInputCostsOnlyStoredBlockFraming) {
   const Bytes noise = random_bytes(200000, 31);
   for (const int level : {1, 6, 9}) {
     Bytes packed;
-    DeflateCodec(level).compress(noise, packed, 65536);
+    DeflateCodec(level).compress(noise, packed, CodecHints{.segment_bytes = 65536});
     EXPECT_LE(packed.size(), stored_bound(noise.size())) << level;
   }
 }
@@ -145,9 +147,33 @@ TEST(Deflate, SkippingTheSearchCostsLittleRatio) {
   const Bytes data = plane_like(65536);
   Bytes adaptive;
   Bytes exhaustive;
-  DeflateCodec(8).compress(data, adaptive, 65536);
-  DeflateCodec(9).compress(data, exhaustive, 65536);
+  DeflateCodec(8).compress(data, adaptive, CodecHints{.segment_bytes = 65536});
+  DeflateCodec(9).compress(data, exhaustive, CodecHints{.segment_bytes = 65536});
   EXPECT_LE(static_cast<double>(adaptive.size()), 1.02 * static_cast<double>(exhaustive.size()));
+}
+
+// Precomputed histograms are an optimisation only: with correct counts the
+// output is byte-identical, and counts that do not cover the segments exactly
+// are ignored.
+TEST(Deflate, PrecomputedHistogramsDoNotChangeTheStream) {
+  const std::size_t plane = 20000;
+  const Bytes data = plane_like(plane);
+  std::vector<std::uint32_t> histograms(4 * 256, 0);
+  for (std::size_t i = 0; i < data.size(); ++i) {
+    ++histograms[(i / plane) * 256 + data[i]];
+  }
+  for (const int level : {1, 6, 9}) {
+    const DeflateCodec codec(level);
+    Bytes without;
+    Bytes with;
+    Bytes with_wrong_count;
+    codec.compress(data, without, CodecHints{.segment_bytes = plane});
+    codec.compress(data, with, CodecHints{.segment_bytes = plane, .segment_histograms = histograms});
+    codec.compress(data, with_wrong_count,
+                   CodecHints{.segment_bytes = plane, .segment_histograms = std::span(histograms).first(3 * 256)});
+    EXPECT_EQ(with, without) << level;
+    EXPECT_EQ(with_wrong_count, without) << level;
+  }
 }
 
 TEST(Deflate, CompressAppendsToExistingOutput) {

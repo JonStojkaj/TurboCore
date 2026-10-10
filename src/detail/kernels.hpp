@@ -20,6 +20,11 @@ namespace turbocore::detail {
 /// cannot run it. The CPU check runs once.
 [[nodiscard]] const KernelTable* avx2_kernels() noexcept;
 
+/// True if the GPU transform stage was compiled in and a device is present.
+[[nodiscard]] bool cuda_available() noexcept;
+
+/// The CPU kernels to use with `backend` (for Backend::Cuda: the best CPU
+/// kernels, for the work that stays on the host).
 /// Throws Error(BackendUnavailable) if `backend` cannot run here.
 [[nodiscard]] const KernelTable& select_kernels(Backend backend);
 

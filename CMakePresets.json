@@ -82,6 +82,11 @@
         "TURBOCORE_REQUIRE_AVX2": "1"
       }
     },
-    { "name": "cuda", "inherits": "base", "configurePreset": "cuda" }
+    {
+      "name": "cuda",
+      "inherits": "base",
+      "configurePreset": "cuda",
+      "environment": { "TURBOCORE_REQUIRE_CUDA": "1" }
+    }
   ]
 }

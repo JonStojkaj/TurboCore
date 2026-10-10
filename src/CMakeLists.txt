@@ -84,9 +84,11 @@ if(TURBOCORE_HAS_AVX2)
   target_compile_options(turbocore_avx2 PRIVATE ${TURBOCORE_AVX2_FLAGS})
 endif()
 
+# The GPU transform stage. Nothing CUDA-related is compiled unless the toolkit
+# was found (see cmake/TurboCoreCUDA.cmake).
 if(TURBOCORE_HAS_CUDA)
   _turbocore_add_backend(turbocore_cuda
-    backends/cuda/probe_cuda.cu
+    backends/cuda/transform_stage.cu
   )
   target_link_libraries(turbocore_cuda PRIVATE CUDA::cudart)
   target_link_libraries(turbocore PRIVATE CUDA::cudart)
